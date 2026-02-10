@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>ヴェネツィア商人の航路開拓 | Venetian Merchant's Route</title>
+<meta name="description" content="15世紀ヴェネツィアを舞台にした戦略カードゲーム。AI商人ダンドロに挑め！ A strategic card game set in 15th century Venice. Challenge the AI merchant Dandolo!">
+<meta name="keywords" content="カードゲーム,ボードゲーム,ヴェネツィア,戦略,card game,board game,Venice,strategy">
+<meta name="author" content="TANEGAMES / TANEGAMES">
+
+<!-- OGP -->
+<meta property="og:title" content="ヴェネツィア商人の航路開拓 | Venetian Merchant's Route">
+<meta property="og:description" content="15世紀ヴェネツィアを舞台にした戦略カードゲーム。AI商人ダンドロに挑め！">
+<meta property="og:type" content="website">
+<!-- TODO: ホスティング先決定後にURLを設定 -->
+<meta property="og:url" content="https://example.com/venetian-merchant/">
+<meta property="og:image" content="https://example.com/venetian-merchant/ogp.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:locale" content="ja_JP">
+<meta property="og:locale:alternate" content="en_US">
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="ヴェネツィア商人の航路開拓 | Venetian Merchant's Route">
+<meta name="twitter:description" content="15世紀ヴェネツィアを舞台にした戦略カードゲーム。AI商人ダンドロに挑め！">
+<meta name="twitter:image" content="https://example.com/venetian-merchant/ogp.png">
+
+<!-- Favicon (inline SVG) -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧭</text></svg>">
+
+<!-- Google Analytics - TODO: 測定IDを設定 -->
+<!-- 
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-XXXXXXXXXX');
+</script>
+-->
+
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body, #root { height: 100%; }
+  body { background: #EDE0C8; -webkit-tap-highlight-color: transparent; }
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700;900&display=swap');
+</style>
+
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useCallback, useEffect, useRef } = React;
+
+const DIRS = ["N", "E", "S", "W"];
+const DIR_COLORS = { N: "#7B2D8E", E: "#C0392B", S: "#27AE60", W: "#2471A3" };
+const DIR_LIGHT = { N: "#F8F2FC", E: "#FEF6F5", S: "#F3FCF7", W: "#F5FAFD" };
+
+const TEXTS = {
+  ja: {
+    title: "ヴェネツィア商人の航路開拓",
+    subtitle: "Venetian Merchant's Route",
+    dirs: { N: "北", E: "東", S: "南", W: "西" },
+    actions: { place: "配置", contract: "重点契約", discard: "捨てる" },
+    deck: "山札残", hand: "手札", log: "航海の軌跡",
+    contracted: "重点契約", gameOver: "ゲーム終了",
+    youWin: "あなたの勝利！", youLose: "ダンドロの勝利…", draw: "引き分け",
+    playAgain: "もう一度遊ぶ", start: "ゲーム開始",
+    selectCard: "手札からカードを選んでください",
+    aiThinking: "ダンドロが考えています…",
+    chooseDir: "契約する方角を選んでください",
+    vs: "vs", turn: "経過ターン",
+    you: "貴方", dandolo: "ダンドロ",
+    howToPlay: "遊び方", close: "閉じる",
+    reselect: "← 選び直す",
+    credit: "TANEGAMES",
+    rules: [
+      "手札からカードを選んで配置・契約・捨てるの3つから行動を選びます",
+      "各航路には今ある最大値より大きい数字のみ置けます",
+      "「1」は空の航路にのみ出せ、相手の最大カードを強奪します",
+      "重点契約は空の航路に宣言でき、得点が2倍になりますが-20のペナルティ付き",
+      "山札がなくなったらゲーム終了、合計スコアで勝敗決定！",
+    ],
+    stats: { record: "戦績", g: "戦", w: "勝", l: "敗", d: "分", pf: "得点", pa: "失点", diff: "得失差" },
+    logTpl: {
+      contract: "{p}が【{d}】で重点契約",
+      discard: "{p}が {d}{v} を破棄",
+      place: "{p}が {d}{v} へ出航",
+      stealHit: "{p}が {d}1 で相手の {d}{sv} を強奪！",
+      stealMiss: "{p}が {d}1 へ出航",
+    },
+    players: { user: "貴方", ai: "ダンドロ" },
+    dandoloLines: {
+      greeting: "私はダンドロ。地中海の覇者だ。さあ、商売を始めよう。",
+      steal: "ふふ、その荷はいただく！", stolen: "くっ…やるな、その荷を返せ！",
+      contract: "この航路、私が押さえさせてもらおう。",
+      place: "着実に航路を広げるとしよう。", discard: "…この荷は手放すか。",
+      winning: "まだまだだな、若い商人よ。", losing: "なかなかやるな…だが油断するなよ。",
+      gameOverWin: "商売とは、こういうものだ。", gameOverLose: "くっ…次は負けんぞ。",
+      gameOverDraw: "互角とは…認めてやろう。", yourTurn: "さあ、次はどう出る？",
+    },
+  },
+  en: {
+    title: "Venetian Merchant's Route",
+    subtitle: "ヴェネツィア商人の航路開拓",
+    dirs: { N: "North", E: "East", S: "South", W: "West" },
+    actions: { place: "Place", contract: "Contract", discard: "Discard" },
+    deck: "Deck", hand: "Hand", log: "Captain's Log",
+    contracted: "Contract", gameOver: "Game Over",
+    youWin: "You Win!", youLose: "Dandolo Wins...", draw: "Draw",
+    playAgain: "Play Again", start: "Start Game",
+    selectCard: "Select a card from your hand",
+    aiThinking: "Dandolo is thinking...",
+    chooseDir: "Choose a direction to contract",
+    vs: "vs", turn: "Turn",
+    you: "You", dandolo: "Dandolo",
+    howToPlay: "How to Play", close: "Close",
+    reselect: "← Reselect",
+    credit: "TANEGAMES",
+    rules: [
+      "Select a card and choose to Place, Contract, or Discard",
+      "Each route only accepts cards higher than the current maximum",
+      "'1' can only be placed on empty routes and steals the opponent's highest card",
+      "Contracts double points on empty routes but cost -20 penalty",
+      "Game ends when the deck runs out — highest total score wins!",
+    ],
+    stats: { record: "Record", g: "G", w: "W", l: "L", d: "D", pf: "PF", pa: "PA", diff: "Diff" },
+    logTpl: {
+      contract: "{p} contracts on 【{d}】",
+      discard: "{p} discards {d}{v}",
+      place: "{p} sails to {d}{v}",
+      stealHit: "{p} steals {d}{sv} with {d}1!",
+      stealMiss: "{p} sails to {d}1",
+    },
+    players: { user: "You", ai: "Dandolo" },
+    dandoloLines: {
+      greeting: "I am Dandolo, master of the Mediterranean. Let us trade.",
+      steal: "Heh, I'll take that cargo!", stolen: "Tch... give that back!",
+      contract: "This route shall be mine.",
+      place: "Expanding my routes, steadily.", discard: "...I'll let this one go.",
+      winning: "Not enough, young merchant.", losing: "Impressive... but don't get cocky.",
+      gameOverWin: "This is how trade works.", gameOverLose: "Tch... I won't lose next time.",
+      gameOverDraw: "A draw... I'll acknowledge your skill.", yourTurn: "So, what's your next move?",
+    },
+  },
+};
+
+// ===== ENGINE =====
+function shuffle(a){const r=[...a];for(let i=r.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[r[i],r[j]]=[r[j],r[i]];}return r;}
+function cardDir(c){return c[0];}
+function cardVal(c){return parseInt(c.substring(1));}
+function sortCards(cards){return[...cards].sort((a,b)=>{const d=DIRS.indexOf(cardDir(a))-DIRS.indexOf(cardDir(b));return d!==0?d:cardVal(a)-cardVal(b);});}
+function calcScore(cards,con){const t=cards.reduce((s,c)=>s+cardVal(c),0);return con?t*2-20:t;}
+function buildDeck(){const d=[];for(const dir of DIRS)for(let i=1;i<=10;i++)d.push(`${dir}${i}`);return d;}
+function getMaxInRoute(board,dir){const c=board[dir];return c.length===0?0:Math.max(...c.map(cardVal));}
+function canPlace(card,board){const d=cardDir(card),v=cardVal(card);if(v===1)return board[d].length===0;return v>getMaxInRoute(board,d);}
+function getPlayableCards(hand,board){return hand.filter(c=>canPlace(c,board));}
+function getContractableDirs(board,contracts){return DIRS.filter(d=>board[d].length===0&&!contracts[d]);}
+
+function initGame(){
+  const deck=shuffle(buildDeck());const first=Math.random()<0.5?"user":"ai";
+  return{deck:deck.slice(14),userHand:sortCards(deck.slice(0,7)),aiHand:sortCards(deck.slice(7,14)),
+    userBoard:{N:[],E:[],S:[],W:[]},aiBoard:{N:[],E:[],S:[],W:[]},
+    userCon:{N:false,E:false,S:false,W:false},aiCon:{N:false,E:false,S:false,W:false},
+    grave:[],turnPlayer:first,turnNumber:1,phase:first==="user"?"selectCard":"aiTurn",
+    selectedCard:null,logs:[],dandoloMsg:"",gameOver:false,lastPlaced:null};
+}
+
+function processTurn(state,player,action,target){
+  const s=JSON.parse(JSON.stringify(state));
+  const isUser=player==="user";
+  const hk=isUser?"userHand":"aiHand",bk=isUser?"userBoard":"aiBoard";
+  const obk=isUser?"aiBoard":"userBoard",ck=isUser?"userCon":"aiCon";
+  let drawNeeded=false,logEntry=null;
+  s.lastPlaced=null;
+  if(action==="contract"){
+    s[ck][target]=true;logEntry={type:"contract",player,dir:target};drawNeeded=false;
+  }else if(action==="discard"){
+    const idx=s[hk].indexOf(target);
+    if(idx>=0){s[hk].splice(idx,1);s.grave.push(target);logEntry={type:"discard",player,dir:cardDir(target),val:cardVal(target)};drawNeeded=true;}
+  }else if(action==="place"){
+    const card=target,d=cardDir(card),v=cardVal(card),idx=s[hk].indexOf(card);
+    if(idx>=0){
+      s[hk].splice(idx,1);s[bk][d].push(card);s.lastPlaced={player,card,dir:d};
+      if(v===1){
+        const oppCol=s[obk][d];
+        if(oppCol.length>0){const stolen=oppCol.pop();s[hk].push(stolen);s[hk]=sortCards(s[hk]);logEntry={type:"stealHit",player,dir:d,val:1,stolenVal:cardVal(stolen)};drawNeeded=false;}
+        else{logEntry={type:"stealMiss",player,dir:d,val:1};drawNeeded=true;}
+      }else{logEntry={type:"place",player,dir:d,val:v};drawNeeded=true;}
+    }
+  }
+  if(drawNeeded&&s.deck.length>0){const drawn=s.deck.shift();s[hk].push(drawn);s[hk]=sortCards(s[hk]);}
+  if(logEntry)s.logs.push(logEntry);
+  s.turnNumber+=1;s.turnPlayer=isUser?"ai":"user";
+  if(s.deck.length===0){s.gameOver=true;s.phase="gameOver";}else{s.phase=isUser?"aiTurn":"selectCard";}
+  return s;
+}
+
+function renderLog(entry,lang){
+  const t=TEXTS[lang],tpl=t.logTpl[entry.type];if(!tpl)return"";
+  return tpl.replace("{p}",t.players[entry.player]).replace(/{d}/g,t.dirs[entry.dir]||entry.dir).replace("{v}",entry.val||"").replace("{sv}",entry.stolenVal||"");
+}
+
+// ===== DANDOLO AI =====
+function getUnknownCards(state){
+  const all=new Set(buildDeck());
+  for(const c of state.aiHand)all.delete(c);
+  for(const d of DIRS){for(const c of state.aiBoard[d])all.delete(c);for(const c of state.userBoard[d])all.delete(c);}
+  for(const c of state.grave)all.delete(c);return[...all];
+}
+function countUnplaceableAfter(state,cardToPlace){
+  const simBoard=JSON.parse(JSON.stringify(state.aiBoard));simBoard[cardDir(cardToPlace)].push(cardToPlace);
+  const simState={aiHand:state.aiHand.filter(c=>c!==cardToPlace),aiBoard:simBoard,userBoard:state.userBoard,grave:state.grave};
+  const unknown=getUnknownCards(simState);let count=0;
+  for(const c of unknown){const cd=cardDir(c),cv=cardVal(c),mx=getMaxInRoute(simBoard,cd);
+    if(cv===1){if(simBoard[cd].length>0)count++;}else{if(cv<=mx)count++;}}
+  return count;
+}
+// Endgame optimizer: find optimal card placement plan from hand to maximize total score
+// For each direction independently, find the best subset of hand cards that can be placed
+// in ascending order on top of existing cards, maximizing the score contribution.
+function findOptimalPlan(hand, board, con) {
+  let bestPlan = []; // [{dir, cards: [sorted low to high]}]
+  let bestTotal = 0;
+  
+  // Group hand cards by direction (exclude 1s for scoring - they're worth almost nothing)
+  const byDir = {};
+  for (const d of DIRS) {
+    byDir[d] = hand.filter(c => cardDir(c) === d && cardVal(c) > 1)
+      .sort((a, b) => cardVal(a) - cardVal(b));
+  }
+  
+  // For each direction, find all valid ascending subsequences that can be placed
+  // on top of current max, then pick the one with highest score contribution
+  for (const d of DIRS) {
+    const currentMax = getMaxInRoute(board, d);
+    const candidates = byDir[d].filter(c => cardVal(c) > currentMax);
+    
+    // All subsequences of candidates are valid since candidates are already sorted ascending
+    // and all > currentMax. We want the subset that maximizes score.
+    // Since all values are positive and contract doubles them, we want ALL placeable cards.
+    // But we need to ensure ascending order is maintained.
+    
+    // Filter to valid ascending sequence (already sorted, all > currentMax, so all valid)
+    // Just take all of them - more cards = more points
+    if (candidates.length > 0) {
+      const vals = candidates.map(cardVal);
+      const contribution = con[d] 
+        ? vals.reduce((s, v) => s + v, 0) * 2  // contracted: each point doubled
+        : vals.reduce((s, v) => s + v, 0);       // normal: face value
+      bestPlan.push({ dir: d, cards: candidates, contribution });
+      bestTotal += contribution;
+    }
+  }
+  
+  return { plan: bestPlan, total: bestTotal };
+}
+
+// Get the next card to play from optimal plan (lowest value card from highest priority direction)
+function getEndgameCard(hand, board, con) {
+  const { plan } = findOptimalPlan(hand, board, con);
+  if (plan.length === 0) return null;
+  
+  // Priority: contracted empty dirs first, then by contribution per card
+  plan.sort((a, b) => {
+    const aEmpty = con[a.dir] && board[a.dir].length === 0;
+    const bEmpty = con[b.dir] && board[b.dir].length === 0;
+    if (aEmpty !== bEmpty) return aEmpty ? -1 : 1;
+    // Then by per-card contribution (higher = more urgent to start placing)
+    return (b.contribution / b.cards.length) - (a.contribution / a.cards.length);
+  });
+  
+  // From highest priority direction, play the LOWEST card (to preserve ascending order)
+  return plan[0].cards[0];
+}
+
+function aiDecide(state){
+  const s=state,hand=s.aiHand,board=s.aiBoard,con=s.aiCon,turn=s.turnNumber;
+  const contractable=getContractableDirs(board,con),cc=[];
+  for(const d of contractable){
+    const dc=hand.filter(c=>cardDir(c)===d&&cardVal(c)>1);if(dc.length===0)continue;
+    const total=dc.reduce((s,c)=>s+cardVal(c),0),high=dc.filter(c=>cardVal(c)>=6),vhigh=dc.filter(c=>cardVal(c)>=8),minV=Math.min(...dc.map(cardVal));
+    let ok=false;
+    if(high.length>=2&&total-turn>=16)ok=true;
+    if(!ok&&total>=23){const sorted=dc.map(cardVal).sort((a,b)=>a-b);let can=true;for(let i=1;i<sorted.length;i++)if(sorted[i]<=sorted[i-1]){can=false;break;}if(can)ok=true;}
+    if(!ok&&turn<=2&&vhigh.length>=2)ok=true;
+    if(!ok&&turn>=10&&total>=23)ok=true;
+    if(ok)cc.push({dir:d,minV});
+  }
+  if(cc.length>0){cc.sort((a,b)=>a.minV-b.minV);return{action:"contract",target:cc[0].dir};}
+  const sc=hand.filter(c=>cardVal(c)===1&&board[cardDir(c)].length===0);
+  if(sc.length>0){
+    const ev=sc.map(c=>({card:c,value:s.userBoard[cardDir(c)].length>0?Math.max(...s.userBoard[cardDir(c)].map(cardVal)):0})).filter(e=>e.value>=6).sort((a,b)=>b.value-a.value);
+    if(ev.length>0)return{action:"place",target:ev[0].card};
+  }
+  
+  // === ENDGAME MODE: deck <= 14, switch to score maximization ===
+  if(s.deck.length<=14){
+    const endgameCard=getEndgameCard(hand,board,con);
+    if(endgameCard)return{action:"place",target:endgameCard};
+  }
+  
+  // === NORMAL MODE: minimize unplaceable cards ===
+  const playable=getPlayableCards(hand,board).filter(c=>{if(cardVal(c)===1&&!con[cardDir(c)])return false;return true;});
+  if(playable.length>0){
+    let best=null,bs=Infinity;
+    for(const card of playable){const d=cardDir(card),up=countUnplaceableAfter(s,card),hc=board[d].length>0?0:1,ce=(con[d]&&board[d].length===0)?-500:0,cb=con[d]?-50:0,score=up*100+hc+ce+cb;if(score<bs){bs=score;best=card;}}
+    if(best)return{action:"place",target:best};
+  }
+  const ap=getPlayableCards(hand,board);
+  if(ap.length>0){let best=null,bs=Infinity;for(const card of ap){const d=cardDir(card),up=countUnplaceableAfter(s,card),hc=board[d].length>0?0:1,score=up*100+hc;if(score<bs){bs=score;best=card;}}if(best)return{action:"place",target:best};}
+  const dead=hand.filter(c=>!canPlace(c,board)).sort((a,b)=>cardVal(a)-cardVal(b));
+  if(dead.length>0)return{action:"discard",target:dead[0]};
+  return{action:"discard",target:[...hand].sort((a,b)=>cardVal(a)-cardVal(b))[0]};
+}
+function getDandoloLine(lang,action,state){
+  const L=TEXTS[lang].dandoloLines;
+  if(state.gameOver){const us=DIRS.reduce((s,d)=>s+calcScore(state.userBoard[d],state.userCon[d]),0),ai=DIRS.reduce((s,d)=>s+calcScore(state.aiBoard[d],state.aiCon[d]),0);return ai>us?L.gameOverWin:us>ai?L.gameOverLose:L.gameOverDraw;}
+  if(action==="steal")return L.steal;if(action==="stolen")return L.stolen;if(action==="contract")return L.contract;if(action==="place")return L.place;if(action==="discard")return L.discard;
+  const us=DIRS.reduce((s,d)=>s+calcScore(state.userBoard[d],state.userCon[d]),0),ai=DIRS.reduce((s,d)=>s+calcScore(state.aiBoard[d],state.aiCon[d]),0);
+  if(ai>us+10)return L.winning;if(us>ai+10)return L.losing;return L.yourTurn;
+}
+
+// ===== COMPONENTS =====
+function MiniCard({card,isLastPlaced,lang}){
+  const d=cardDir(card),v=cardVal(card),color=DIR_COLORS[d],t=TEXTS[lang];
+  return(<div style={{display:"inline-flex",flexDirection:"column",alignItems:"center",justifyContent:"center",width:36,height:46,borderRadius:5,background:isLastPlaced?"linear-gradient(135deg,#FFD70033,#FFD70077)":"#FFF8F0",border:isLastPlaced?"2px solid #DAA520":`1.5px solid ${color}44`,boxShadow:isLastPlaced?"0 0 8px rgba(218,165,32,0.5)":"0 1px 3px rgba(0,0,0,0.1)",position:"relative",flexShrink:0}}>
+    {isLastPlaced&&<div style={{position:"absolute",top:-4,right:-4,width:12,height:12,background:"#DAA520",borderRadius:"50%",fontSize:7,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800}}>★</div>}
+    {v===1&&<div style={{fontSize:7,color:"#C0392B",position:"absolute",top:1,left:2}}>⚔</div>}
+    <div style={{fontSize:8,color,fontWeight:600,lineHeight:1}}>{t.dirs[d]}</div>
+    <div style={{fontSize:16,fontWeight:800,color,lineHeight:1}}>{v}</div>
+  </div>);
+}
+function HandCard({card,selected,onClick,lang}){
+  const d=cardDir(card),v=cardVal(card),color=DIR_COLORS[d],t=TEXTS[lang];
+  return(<div onClick={onClick} style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",width:48,height:66,borderRadius:6,background:selected?`linear-gradient(135deg,${color}22,${color}44)`:"#FFF8F0",border:`2px solid ${selected?color:"#C4A882"}`,boxShadow:selected?`0 0 10px ${color}55`:"1px 2px 4px rgba(0,0,0,0.12)",cursor:onClick?"pointer":"default",transform:selected?"translateY(-6px)":"none",transition:"all 0.15s ease",position:"relative",flexShrink:0}}>
+    {v===1&&<div style={{fontSize:8,color:"#C0392B",position:"absolute",top:2,left:3}}>⚔️</div>}
+    <div style={{fontSize:10,color,fontWeight:600}}>{t.dirs[d]}</div>
+    <div style={{fontSize:22,fontWeight:800,color,lineHeight:1}}>{v}</div>
+  </div>);
+}
+function DirectionRow({dir,aiCards,userCards,aiCon,userCon,aiScore,userScore,lang,lastPlaced}){
+  const t=TEXTS[lang],color=DIR_COLORS[dir];
+  const isAiLast=lastPlaced&&lastPlaced.player==="ai"&&lastPlaced.dir===dir;
+  const isUserLast=lastPlaced&&lastPlaced.player==="user"&&lastPlaced.dir===dir;
+  return(<div style={{background:DIR_LIGHT[dir],border:`1px solid ${color}33`,borderRadius:8,padding:"6px 8px",marginBottom:6}}>
+    <div style={{fontSize:14,fontWeight:800,color,marginBottom:4}}>{t.dirs[dir]}</div>
+    <div style={{display:"flex",alignItems:"center",gap:4,minHeight:52,padding:"3px 0",borderBottom:`1px dashed ${color}33`}}>
+      <div style={{width:58,fontSize:10,flexShrink:0,display:"flex",flexDirection:"column",alignItems:"flex-start"}}><span style={{fontWeight:700,color:"#5C3317"}}>{t.dandolo}</span>{aiCon&&<span style={{fontSize:8,background:color,color:"#fff",borderRadius:3,padding:"1px 4px",marginTop:1}}>{t.contracted}</span>}</div>
+      <div style={{display:"flex",gap:3,flex:1,flexWrap:"wrap"}}>{aiCards.length===0?<span style={{color:"#CCC",fontSize:11,fontStyle:"italic",padding:"12px 0"}}>—</span>:aiCards.map((c,i)=><MiniCard key={i} card={c} lang={lang} isLastPlaced={isAiLast&&i===aiCards.length-1}/>)}</div>
+      <div style={{width:38,textAlign:"right",fontSize:14,fontWeight:800,flexShrink:0,color:aiScore<0?"#C0392B":aiScore>0?"#5C4033":"#AAA"}}>{aiScore}</div>
+    </div>
+    <div style={{display:"flex",alignItems:"center",gap:4,minHeight:52,padding:"3px 0"}}>
+      <div style={{width:58,fontSize:10,flexShrink:0,display:"flex",flexDirection:"column",alignItems:"flex-start"}}><span style={{fontWeight:700,color:"#2471A3"}}>{t.you}</span>{userCon&&<span style={{fontSize:8,background:color,color:"#fff",borderRadius:3,padding:"1px 4px",marginTop:1}}>{t.contracted}</span>}</div>
+      <div style={{display:"flex",gap:3,flex:1,flexWrap:"wrap"}}>{userCards.length===0?<span style={{color:"#CCC",fontSize:11,fontStyle:"italic",padding:"12px 0"}}>—</span>:userCards.map((c,i)=><MiniCard key={i} card={c} lang={lang} isLastPlaced={isUserLast&&i===userCards.length-1}/>)}</div>
+      <div style={{width:38,textAlign:"right",fontSize:14,fontWeight:800,flexShrink:0,color:userScore<0?"#C0392B":userScore>0?"#2471A3":"#AAA"}}>{userScore}</div>
+    </div>
+  </div>);
+}
+function StatsBar({stats,lang}){
+  const s=TEXTS[lang].stats;if(stats.games===0)return null;
+  return(<div style={{display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap",padding:"5px 8px",background:"#3C2F1E",borderRadius:6,marginBottom:8,fontSize:11,color:"#D4C4A8"}}>
+    <span style={{fontWeight:700,color:"#F5ECD7"}}>{stats.games}{s.g}</span>
+    <span style={{color:"#27AE60"}}>{stats.wins}{s.w}</span><span style={{color:"#C0392B"}}>{stats.losses}{s.l}</span><span style={{color:"#AAA"}}>{stats.draws}{s.d}</span>
+    <span style={{color:"#666"}}>|</span>
+    <span>{s.pf}:{stats.pointsFor}</span><span>{s.pa}:{stats.pointsAgainst}</span>
+    <span style={{fontWeight:700,color:stats.pointsDiff>0?"#27AE60":stats.pointsDiff<0?"#C0392B":"#AAA"}}>{s.diff}:{stats.pointsDiff>0?"+":""}{stats.pointsDiff}</span>
+  </div>);
+}
+
+// ===== MAIN APP =====
+function App(){
+  const[lang,setLang]=useState("ja");
+  const[game,setGame]=useState(null);
+  const[showRules,setShowRules]=useState(false);
+  const[contractDir,setContractDir]=useState(null);
+  const[stats,setStats]=useState({games:0,wins:0,losses:0,draws:0,pointsFor:0,pointsAgainst:0,pointsDiff:0,history:[]});
+  const aiTimerRef=useRef(null);
+  const t=TEXTS[lang];
+
+  const recordResult=useCallback((us,ai)=>{
+    setStats(prev=>{const r=us>ai?"win":us<ai?"loss":"draw";const h=[...prev.history,{userScore:us,aiScore:ai,result:r}].slice(-10);
+      const w=h.filter(x=>x.result==="win").length,l=h.filter(x=>x.result==="loss").length,d=h.filter(x=>x.result==="draw").length;
+      const pf=h.reduce((s,x)=>s+x.userScore,0),pa=h.reduce((s,x)=>s+x.aiScore,0);
+      return{games:h.length,wins:w,losses:l,draws:d,pointsFor:pf,pointsAgainst:pa,pointsDiff:pf-pa,history:h};});
+  },[]);
+
+  const startGame=useCallback(()=>{const g=initGame();g.dandoloMsg=t.dandoloLines.greeting;setGame(g);setContractDir(null);},[t]);
+
+  useEffect(()=>{if(!game||!game.gameOver||game._recorded)return;
+    const uT=DIRS.reduce((s,d)=>s+calcScore(game.userBoard[d],game.userCon[d]),0),aT=DIRS.reduce((s,d)=>s+calcScore(game.aiBoard[d],game.aiCon[d]),0);
+    recordResult(uT,aT);setGame(prev=>({...prev,_recorded:true}));},[game?.gameOver]);
+
+  useEffect(()=>{if(!game||game.gameOver||game.turnPlayer!=="ai")return;
+    aiTimerRef.current=setTimeout(()=>{setGame(prev=>({...prev,phase:"aiTurn"}));
+      setTimeout(()=>{setGame(prev=>{const dec=aiDecide(prev),ns=processTurn(prev,"ai",dec.action,dec.target);
+        let lk=dec.action;if(dec.action==="place"&&cardVal(dec.target)===1&&prev.userBoard[cardDir(dec.target)].length>0)lk="steal";
+        ns.dandoloMsg=getDandoloLine(lang,lk,ns);if(!ns.gameOver&&ns.turnPlayer==="user"){ns.phase="selectCard";ns.selectedCard=null;}return ns;});
+      },600+Math.random()*500);},300);
+    return()=>clearTimeout(aiTimerRef.current);},[game?.turnPlayer,game?.turnNumber]);
+
+  const selectCard=(card)=>{if(!game||game.turnPlayer!=="user"||game.gameOver)return;setGame({...game,selectedCard:card,phase:"selectAction"});setContractDir(null);};
+  const doAction=(action)=>{if(!game)return;
+    if(action==="contract"){const dirs=getContractableDirs(game.userBoard,game.userCon);if(dirs.length===0)return;
+      if(dirs.length===1){const ns=processTurn(game,"user","contract",dirs[0]);ns.dandoloMsg=getDandoloLine(lang,"yourTurn",ns);ns.selectedCard=null;setGame(ns);}else setContractDir(dirs);return;}
+    const card=game.selectedCard;if(!card)return;
+    if(action==="place"){if(!canPlace(card,game.userBoard))return;const ns=processTurn(game,"user","place",card);let lk="yourTurn";if(cardVal(card)===1&&game.aiBoard[cardDir(card)].length>0)lk="stolen";ns.dandoloMsg=getDandoloLine(lang,lk,ns);ns.selectedCard=null;setGame(ns);setContractDir(null);}
+    else if(action==="discard"){const ns=processTurn(game,"user","discard",card);ns.dandoloMsg=getDandoloLine(lang,"yourTurn",ns);ns.selectedCard=null;setGame(ns);setContractDir(null);}
+  };
+  const doContract=(dir)=>{const ns=processTurn(game,"user","contract",dir);ns.dandoloMsg=getDandoloLine(lang,"yourTurn",ns);ns.selectedCard=null;setGame(ns);setContractDir(null);};
+
+  const base={maxWidth:520,margin:"0 auto",padding:"8px 12px",fontFamily:"'Noto Serif JP','Georgia',serif",background:"linear-gradient(180deg,#F5ECD7 0%,#EDE0C8 100%)",minHeight:"100vh",color:"#3C2F1E"};
+
+  // TITLE
+  if(!game){return(<div style={base}>
+    <div style={{textAlign:"center",paddingTop:48}}>
+      <div style={{fontSize:14,color:"#8B7355",letterSpacing:4,marginBottom:8}}>⚓ ⚓ ⚓</div>
+      <h1 style={{fontSize:22,fontWeight:800,color:"#5C3317",margin:"0 0 4px",lineHeight:1.3}}>{t.title}</h1>
+      <p style={{fontSize:13,color:"#8B7355",margin:"0 0 28px",fontStyle:"italic"}}>{t.subtitle}</p>
+      <div style={{width:100,height:100,margin:"0 auto 24px",borderRadius:"50%",border:"3px solid #C4A882",background:"radial-gradient(circle,#F5ECD7,#D4C4A8)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:40}}>🧭</div>
+      <StatsBar stats={stats} lang={lang}/>
+      <button onClick={startGame} style={{padding:"12px 40px",fontSize:16,fontWeight:700,background:"linear-gradient(135deg,#8B4513,#A0522D)",color:"#F5ECD7",border:"none",borderRadius:8,cursor:"pointer",letterSpacing:2,boxShadow:"0 4px 12px rgba(92,51,23,0.3)"}}>{t.start}</button>
+      <div style={{marginTop:16,display:"flex",justifyContent:"center",gap:8}}>
+        <button onClick={()=>setLang(lang==="ja"?"en":"ja")} style={{padding:"6px 16px",fontSize:12,background:"transparent",border:"1px solid #C4A882",borderRadius:4,cursor:"pointer",color:"#5C3317"}}>{lang==="ja"?"English":"日本語"}</button>
+        <button onClick={()=>setShowRules(true)} style={{padding:"6px 16px",fontSize:12,background:"transparent",border:"1px solid #C4A882",borderRadius:4,cursor:"pointer",color:"#5C3317"}}>{t.howToPlay}</button>
+      </div>
+      <div style={{marginTop:40,fontSize:11,color:"#B8A88A"}}>&copy; {t.credit}</div>
+    </div>
+    {showRules&&(<div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}} onClick={()=>setShowRules(false)}>
+      <div style={{background:"#F5ECD7",padding:24,borderRadius:12,maxWidth:400,margin:16,border:"2px solid #C4A882"}} onClick={e=>e.stopPropagation()}>
+        <h3 style={{margin:"0 0 12px",color:"#5C3317"}}>{t.howToPlay}</h3>
+        {t.rules.map((r,i)=><p key={i} style={{fontSize:13,margin:"8px 0",color:"#5C4033",lineHeight:1.5}}>{i+1}. {r}</p>)}
+        <button onClick={()=>setShowRules(false)} style={{marginTop:12,padding:"8px 24px",background:"#8B4513",color:"#F5ECD7",border:"none",borderRadius:6,cursor:"pointer"}}>{t.close}</button>
+      </div>
+    </div>)}
+  </div>);}
+
+  // GAME
+  const userTotal=DIRS.reduce((s,d)=>s+calcScore(game.userBoard[d],game.userCon[d]),0),aiTotal=DIRS.reduce((s,d)=>s+calcScore(game.aiBoard[d],game.aiCon[d]),0);
+  const isUserTurn=game.turnPlayer==="user"&&!game.gameOver,sel=game.selectedCard;
+  const canPlaceSel=sel&&canPlace(sel,game.userBoard),conDirs=getContractableDirs(game.userBoard,game.userCon);
+
+  return(<div style={base}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 0",borderBottom:"1px solid #C4A882",marginBottom:6}}>
+      <div style={{fontSize:12,fontWeight:700,color:"#5C3317"}}>🧭 {t.deck}: {game.deck.length}{lang==="ja"?"枚":""}</div>
+      <div style={{display:"flex",gap:8,alignItems:"center",fontSize:11}}>
+        <span style={{color:"#8B7355"}}>{t.turn}: {Math.ceil(game.turnNumber/2)}</span>
+        <button onClick={()=>setLang(lang==="ja"?"en":"ja")} style={{padding:"2px 6px",fontSize:10,background:"transparent",border:"1px solid #C4A882",borderRadius:3,cursor:"pointer",color:"#5C3317"}}>{lang==="ja"?"EN":"JP"}</button>
+      </div>
+    </div>
+    <StatsBar stats={stats} lang={lang}/>
+    <div style={{background:"#3C2F1E",color:"#F5ECD7",padding:"7px 12px",borderRadius:8,marginBottom:8,fontSize:12,lineHeight:1.4,fontStyle:"italic"}}>
+      <span style={{fontWeight:700,color:"#D4A76A"}}>{t.dandolo}:</span> 「{game.dandoloMsg}」
+    </div>
+    <div style={{display:"flex",justifyContent:"center",gap:16,marginBottom:8,padding:"6px 0"}}>
+      <div style={{textAlign:"center"}}><div style={{fontSize:10,color:"#5C3317",fontWeight:700}}>{t.dandolo}</div><div style={{fontSize:22,fontWeight:800,color:"#5C3317"}}>{aiTotal}</div></div>
+      <div style={{fontSize:14,color:"#C4A882",alignSelf:"center",fontWeight:700}}>{t.vs}</div>
+      <div style={{textAlign:"center"}}><div style={{fontSize:10,color:"#2471A3",fontWeight:700}}>{t.you}</div><div style={{fontSize:22,fontWeight:800,color:"#2471A3"}}>{userTotal}</div></div>
+    </div>
+    {DIRS.map(d=><DirectionRow key={d} dir={d} lang={lang} aiCards={game.aiBoard[d]} userCards={game.userBoard[d]} aiCon={game.aiCon[d]} userCon={game.userCon[d]} aiScore={calcScore(game.aiBoard[d],game.aiCon[d])} userScore={calcScore(game.userBoard[d],game.userCon[d])} lastPlaced={game.lastPlaced}/>)}
+    {game.gameOver&&(<div style={{textAlign:"center",padding:20,margin:"12px 0",background:"linear-gradient(135deg,#5C3317,#8B4513)",borderRadius:12,color:"#F5ECD7"}}>
+      <div style={{fontSize:18,fontWeight:800,marginBottom:8}}>{t.gameOver}</div>
+      <div style={{fontSize:28,fontWeight:800,marginBottom:4}}>{userTotal} {t.vs} {aiTotal}</div>
+      <div style={{fontSize:16,marginBottom:16}}>{userTotal>aiTotal?t.youWin:userTotal<aiTotal?t.youLose:t.draw}</div>
+      <button onClick={startGame} style={{padding:"10px 32px",fontSize:14,fontWeight:700,background:"#F5ECD7",color:"#5C3317",border:"none",borderRadius:8,cursor:"pointer"}}>{t.playAgain}</button>
+    </div>)}
+    {!game.gameOver&&(<div style={{margin:"8px 0"}}>
+      <div style={{fontSize:11,fontWeight:700,color:"#5C4033",marginBottom:4}}>{t.hand} ({game.userHand.length})</div>
+      <div style={{display:"flex",gap:5,flexWrap:"wrap",padding:8,background:"#E8DDD0",borderRadius:8,minHeight:74,justifyContent:"center",opacity:isUserTurn?1:0.5}}>
+        {game.userHand.map((card,i)=><HandCard key={`${card}-${i}`} card={card} lang={lang} selected={sel===card} onClick={isUserTurn?()=>selectCard(card):undefined}/>)}
+      </div>
+    </div>)}
+    {!game.gameOver&&(<div style={{marginTop:6}}>
+      {game.phase==="aiTurn"&&<div style={{textAlign:"center",padding:10,color:"#8B7355",fontSize:12,fontStyle:"italic"}}>⏳ {t.aiThinking}</div>}
+      {game.phase==="selectCard"&&isUserTurn&&<div style={{textAlign:"center",padding:8,color:"#8B7355",fontSize:12}}>{t.selectCard}</div>}
+      {game.phase==="selectAction"&&isUserTurn&&!contractDir&&(<>
+        <div style={{display:"flex",gap:6,justifyContent:"center"}}>
+          <button onClick={()=>doAction("place")} disabled={!canPlaceSel} style={{padding:"10px 18px",fontSize:13,fontWeight:700,background:canPlaceSel?"#27AE60":"#CCC",color:"#fff",border:"none",borderRadius:6,cursor:canPlaceSel?"pointer":"not-allowed"}}>{t.actions.place}</button>
+          <button onClick={()=>doAction("contract")} disabled={conDirs.length===0} style={{padding:"10px 18px",fontSize:13,fontWeight:700,background:conDirs.length>0?"#8B4513":"#CCC",color:"#fff",border:"none",borderRadius:6,cursor:conDirs.length>0?"pointer":"not-allowed"}}>{t.actions.contract}</button>
+          <button onClick={()=>doAction("discard")} style={{padding:"10px 18px",fontSize:13,fontWeight:700,background:"#C0392B",color:"#fff",border:"none",borderRadius:6,cursor:"pointer"}}>{t.actions.discard}</button>
+        </div>
+        <div style={{textAlign:"center",marginTop:6}}><button onClick={()=>setGame({...game,phase:"selectCard",selectedCard:null})} style={{padding:"3px 10px",fontSize:10,background:"transparent",border:"1px solid #C4A882",borderRadius:4,cursor:"pointer",color:"#8B7355"}}>{t.reselect}</button></div>
+      </>)}
+      {contractDir&&(<div style={{textAlign:"center"}}>
+        <div style={{fontSize:12,color:"#5C4033",marginBottom:6}}>{t.chooseDir}</div>
+        <div style={{display:"flex",gap:6,justifyContent:"center"}}>
+          {contractDir.map(d=><button key={d} onClick={()=>doContract(d)} style={{padding:"10px 20px",fontSize:14,fontWeight:700,background:DIR_COLORS[d],color:"#fff",border:"none",borderRadius:6,cursor:"pointer"}}>{t.dirs[d]}</button>)}
+          <button onClick={()=>{setContractDir(null);setGame({...game,phase:"selectCard",selectedCard:null});}} style={{padding:"10px 14px",fontSize:12,background:"#888",color:"#fff",border:"none",borderRadius:6,cursor:"pointer"}}>✕</button>
+        </div>
+      </div>)}
+    </div>)}
+    {game.logs.length>0&&(<div style={{marginTop:10,padding:8,background:"#E8DDD0",borderRadius:8,fontSize:11,color:"#5C4033"}}>
+      <div style={{fontWeight:700,marginBottom:3}}>📜 {t.log}</div>
+      {game.logs.slice(-4).map((entry,i)=><div key={i} style={{padding:"2px 0",borderBottom:"1px solid #D4C4A8",opacity:0.55+(i*0.15)}}>{renderLog(entry,lang)}</div>)}
+    </div>)}
+    <div style={{textAlign:"center",marginTop:16,paddingBottom:12,fontSize:10,color:"#B8A88A"}}>&copy; {t.credit}</div>
+  </div>);
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
