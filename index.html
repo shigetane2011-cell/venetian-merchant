@@ -6,7 +6,7 @@
 <title>ヴェネツィア商人の航路開拓 | Venetian Merchant's Route</title>
 <meta name="description" content="15世紀ヴェネツィアを舞台にした戦略カードゲーム。AI商人ダンドロに挑め！ A strategic card game set in 15th century Venice. Challenge the AI merchant Dandolo!">
 <meta name="keywords" content="カードゲーム,ボードゲーム,ヴェネツィア,戦略,card game,board game,Venice,strategy">
-<meta name="author" content="TANEGAMES / TANEGAMES">
+<meta name="author" content="TANEGAMES / Tanehashi Games">
 
 <!-- OGP -->
 <meta property="og:title" content="ヴェネツィア商人の航路開拓 | Venetian Merchant's Route">
@@ -120,7 +120,7 @@ const TEXTS = {
     you: "You", dandolo: "Dandolo",
     howToPlay: "How to Play", close: "Close",
     reselect: "← Reselect",
-    credit: "TANEGAMES",
+    credit: "Tanehashi Games",
     rules: [
       "Select a card and choose to Place, Contract, or Discard",
       "Each route only accepts cards higher than the current maximum",
@@ -221,48 +221,110 @@ function countUnplaceableAfter(state,cardToPlace){
   return count;
 }
 // Endgame optimizer: find optimal card placement plan from hand to maximize total score
-// For each direction independently, find the best subset of hand cards that can be placed
-// in ascending order on top of existing cards, maximizing the score contribution.
-function findOptimalPlan(hand, board, con) {
-  let bestPlan = []; // [{dir, cards: [sorted low to high]}]
-  let bestTotal = 0;
-  
-  // Group hand cards by direction (exclude 1s for scoring - they're worth almost nothing)
+// Considers remaining turns to avoid placing low cards when only high cards can fit
+function findOptimalPlan(hand, board, con, remainingTurns) {
+  // Group hand cards by direction (exclude 1s - they're for stealing, not scoring)
   const byDir = {};
   for (const d of DIRS) {
     byDir[d] = hand.filter(c => cardDir(c) === d && cardVal(c) > 1)
       .sort((a, b) => cardVal(a) - cardVal(b));
   }
   
-  // For each direction, find all valid ascending subsequences that can be placed
-  // on top of current max, then pick the one with highest score contribution
+  // For each direction, find placeable cards in ascending order
+  const dirPlans = [];
   for (const d of DIRS) {
     const currentMax = getMaxInRoute(board, d);
     const candidates = byDir[d].filter(c => cardVal(c) > currentMax);
+    if (candidates.length === 0) continue;
     
-    // All subsequences of candidates are valid since candidates are already sorted ascending
-    // and all > currentMax. We want the subset that maximizes score.
-    // Since all values are positive and contract doubles them, we want ALL placeable cards.
-    // But we need to ensure ascending order is maintained.
+    const multiplier = con[d] ? 2 : 1;
     
-    // Filter to valid ascending sequence (already sorted, all > currentMax, so all valid)
-    // Just take all of them - more cards = more points
-    if (candidates.length > 0) {
-      const vals = candidates.map(cardVal);
-      const contribution = con[d] 
-        ? vals.reduce((s, v) => s + v, 0) * 2  // contracted: each point doubled
-        : vals.reduce((s, v) => s + v, 0);       // normal: face value
-      bestPlan.push({ dir: d, cards: candidates, contribution });
-      bestTotal += contribution;
+    // If we can place all candidates within remaining turns, great
+    // If not, we need to pick the BEST subset that fits in remaining turns
+    // Key insight: we must place in ascending order, so if we skip a low card
+    // we can still place higher cards after it
+    
+    // Generate all valid subsequences and their scores
+    // For small hand sizes (<= 7 per direction) this is fast
+    const vals = candidates.map(cardVal);
+    
+    // For each possible number of cards to place (1 to candidates.length)
+    // find the highest-scoring ascending subsequence of that length
+    // Since candidates are sorted ascending and all > currentMax,
+    // the best N cards to place are the N HIGHEST (placed in order)
+    // because we can skip lower ones
+    
+    // Wait - we must place in ascending order, and each must be > previous placed.
+    // If we pick only the top N from candidates, they're already in ascending order.
+    // So taking the last N candidates is always valid.
+    
+    const subsets = [];
+    for (let take = 1; take <= candidates.length; take++) {
+      // Take the HIGHEST 'take' cards (last 'take' from sorted candidates)
+      const chosen = candidates.slice(candidates.length - take);
+      const score = chosen.reduce((s, c) => s + cardVal(c), 0) * multiplier;
+      subsets.push({ cards: chosen, score, count: take });
+    }
+    
+    dirPlans.push({ dir: d, subsets });
+  }
+  
+  // Now allocate remaining turns across directions to maximize total score
+  // Greedy: try all possible allocations (small search space)
+  if (dirPlans.length === 0) return { plan: [], total: 0 };
+  
+  // Simple greedy: for each direction, calculate score per turn for each subset size
+  // Then greedily pick the best turns
+  let allOptions = [];
+  for (const dp of dirPlans) {
+    for (const sub of dp.subsets) {
+      allOptions.push({
+        dir: dp.dir,
+        cards: sub.cards,
+        score: sub.score,
+        turns: sub.count,
+        scorePerTurn: sub.score / sub.count,
+      });
     }
   }
   
-  return { plan: bestPlan, total: bestTotal };
+  // Find best combination that fits in remainingTurns
+  // Since directions are independent, we can use a simple approach:
+  // Pick at most one subset per direction, total turns <= remainingTurns
+  let bestCombo = [];
+  let bestTotal = 0;
+  
+  // With 4 directions and small subset counts, brute force is fine
+  const dirOptions = dirPlans.map(dp => [null, ...dp.subsets.map((sub, i) => ({...sub, dir: dp.dir}))]);
+  
+  function searchCombos(idx, turnsLeft, currentCombo, currentScore) {
+    if (idx >= dirOptions.length) {
+      if (currentScore > bestTotal) {
+        bestTotal = currentScore;
+        bestCombo = [...currentCombo];
+      }
+      return;
+    }
+    for (const opt of dirOptions[idx]) {
+      if (opt === null) {
+        searchCombos(idx + 1, turnsLeft, currentCombo, currentScore);
+      } else if (opt.count <= turnsLeft) {
+        currentCombo.push(opt);
+        searchCombos(idx + 1, turnsLeft - opt.count, currentCombo, currentScore + opt.score);
+        currentCombo.pop();
+      }
+    }
+  }
+  searchCombos(0, remainingTurns, [], 0);
+  
+  const plan = bestCombo.map(opt => ({ dir: opt.dir, cards: opt.cards, contribution: opt.score }));
+  return { plan, total: bestTotal };
 }
 
-// Get the next card to play from optimal plan (lowest value card from highest priority direction)
-function getEndgameCard(hand, board, con) {
-  const { plan } = findOptimalPlan(hand, board, con);
+// Get the next card to play from optimal plan
+function getEndgameCard(hand, board, con, deckSize) {
+  const remainingTurns = Math.ceil(deckSize / 2) + 1; // +1 for current turn
+  const { plan } = findOptimalPlan(hand, board, con, remainingTurns);
   if (plan.length === 0) return null;
   
   // Priority: contracted empty dirs first, then by contribution per card
@@ -270,12 +332,27 @@ function getEndgameCard(hand, board, con) {
     const aEmpty = con[a.dir] && board[a.dir].length === 0;
     const bEmpty = con[b.dir] && board[b.dir].length === 0;
     if (aEmpty !== bEmpty) return aEmpty ? -1 : 1;
-    // Then by per-card contribution (higher = more urgent to start placing)
     return (b.contribution / b.cards.length) - (a.contribution / a.cards.length);
   });
   
-  // From highest priority direction, play the LOWEST card (to preserve ascending order)
+  // From highest priority direction, play the LOWEST card in the plan (ascending order)
   return plan[0].cards[0];
+}
+
+// Calculate the value of stealing from a direction
+// Considers: stolen card value + opponent's score reduction (especially contracts)
+function calcStealValue(stealDir, userBoard, userCon) {
+  const oppCards = userBoard[stealDir];
+  if (oppCards.length === 0) return 0;
+  const maxVal = Math.max(...oppCards.map(cardVal));
+  
+  // Calculate opponent's score before and after steal
+  const scoreBefore = calcScore(oppCards, userCon[stealDir]);
+  const scoreAfter = calcScore(oppCards.filter((c, i) => i < oppCards.length - 1), userCon[stealDir]);
+  const oppDamage = scoreBefore - scoreAfter; // How much opponent loses
+  
+  // Total value = damage to opponent + value of card gained
+  return oppDamage + maxVal;
 }
 
 function aiDecide(state){
@@ -292,15 +369,37 @@ function aiDecide(state){
     if(ok)cc.push({dir:d,minV});
   }
   if(cc.length>0){cc.sort((a,b)=>a.minV-b.minV);return{action:"contract",target:cc[0].dir};}
-  const sc=hand.filter(c=>cardVal(c)===1&&board[cardDir(c)].length===0);
-  if(sc.length>0){
-    const ev=sc.map(c=>({card:c,value:s.userBoard[cardDir(c)].length>0?Math.max(...s.userBoard[cardDir(c)].map(cardVal)):0})).filter(e=>e.value>=6).sort((a,b)=>b.value-a.value);
-    if(ev.length>0)return{action:"place",target:ev[0].card};
+  
+  // Step 2: Steal - evaluate based on total impact (opponent damage + card gained)
+  const stealCandidates=hand.filter(c=>cardVal(c)===1&&board[cardDir(c)].length===0);
+  if(stealCandidates.length>0){
+    const evaluated=stealCandidates.map(c=>{
+      const d=cardDir(c);
+      const value=calcStealValue(d,s.userBoard,s.userCon);
+      return{card:c,value};
+    }).filter(e=>e.value>=6).sort((a,b)=>b.value-a.value);
+    if(evaluated.length>0)return{action:"place",target:evaluated[0].card};
   }
   
-  // === ENDGAME MODE: deck <= 14, switch to score maximization ===
+  // === ENDGAME MODE: deck <= 14 ===
   if(s.deck.length<=14){
-    const endgameCard=getEndgameCard(hand,board,con);
+    // In endgame, also evaluate steals with lower threshold (any positive damage is worth it)
+    if(stealCandidates.length>0){
+      const endgameSteals=stealCandidates.map(c=>{
+        const d=cardDir(c);
+        const oppCards=s.userBoard[d];
+        if(oppCards.length===0)return{card:c,netGain:-Infinity};
+        const stealVal=calcStealValue(d,s.userBoard,s.userCon);
+        // Compare: steal value vs best alternative placement of this turn
+        // If opponent has contracted route, stealing is almost always better
+        const oppContracted=s.userCon[d];
+        const bonus=oppContracted?20:0; // Extra weight for disrupting contracts
+        return{card:c,netGain:stealVal+bonus};
+      }).filter(e=>e.netGain>0).sort((a,b)=>b.netGain-a.netGain);
+      if(endgameSteals.length>0)return{action:"place",target:endgameSteals[0].card};
+    }
+    
+    const endgameCard=getEndgameCard(hand,board,con,s.deck.length);
     if(endgameCard)return{action:"place",target:endgameCard};
   }
   
