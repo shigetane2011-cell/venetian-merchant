@@ -74,7 +74,7 @@ const DIFFS = ["easy", "normal", "hard"];
 const ACH_IDS = ["first_win","big_win","score100","pirate3","no_contract","contracts3","all_routes","hard_win","wins5","wins20"];
 const DIR_COLORS = { N: "#7B2D8E", E: "#C0392B", S: "#27AE60", W: "#2471A3" };
 const DIR_LIGHT = { N: "#F8F2FC", E: "#FEF6F5", S: "#F3FCF7", W: "#F5FAFD" };
-const EVENT_ICONS = { wind: "💨", calm: "🌅", pirate: "🏴‍☠️", fair: "🎪" };
+const EVENT_ICONS = { calm: "🌅", pirate: "🏴‍☠️", fair: "🎪" };
 
 const TEXTS = {
   ja: {
@@ -98,7 +98,6 @@ const TEXTS = {
     difficulty: { label: "難易度", easy: "易しい", normal: "普通", hard: "難しい" },
     eventUI: { label: "貿易風イベント", banner: "本日の風" },
     events: {
-      wind: { name: "追い風", desc: "この方角の得点が1.5倍（切り上げ）" },
       calm: { name: "凪", desc: "重点契約のペナルティが -10 に軽減" },
       pirate: { name: "海賊横行", desc: "「1」で強奪成功時、さらに山札から1枚引く" },
       fair: { name: "市祭", desc: "3枚以上置いた航路に +5点" },
@@ -117,6 +116,13 @@ const TEXTS = {
         wins5: { name: "熟練商人", desc: "通算5勝を達成する" },
         wins20: { name: "地中海の覇者", desc: "通算20勝を達成する" },
       },
+    },
+    rank: {
+      btn: "記録", title: "戦いの記録", career: "通算成績", rate: "勝率",
+      blocks: "期間別勝率（100戦ごと）", blockRow: "第{n}期", current: "現在 第{n}期（{m}戦目）",
+      noneBlocks: "まだ記録がない。ここに歴史が刻まれる——",
+      best3: "ベスト得失点差（3連戦）", noneBest: "通算3戦以上で記録される",
+      diff: "得失差", gamesAt: "第{a}〜{b}戦",
     },
     rules: [
       "手札からカードを選んで配置・契約・捨てるの3つから行動を選びます",
@@ -170,7 +176,6 @@ const TEXTS = {
     difficulty: { label: "Difficulty", easy: "Easy", normal: "Normal", hard: "Hard" },
     eventUI: { label: "Trade Wind Events", banner: "Today's Wind" },
     events: {
-      wind: { name: "Tailwind", desc: "That route's score ×1.5 (rounded up)" },
       calm: { name: "Calm Seas", desc: "Contract penalty reduced to -10" },
       pirate: { name: "Pirates Abound", desc: "Successful steals with '1' also draw a card" },
       fair: { name: "Market Fair", desc: "+5 pts to routes with 3+ cards" },
@@ -189,6 +194,13 @@ const TEXTS = {
         wins5: { name: "Seasoned Merchant", desc: "Reach 5 career wins" },
         wins20: { name: "Master of the Mediterranean", desc: "Reach 20 career wins" },
       },
+    },
+    rank: {
+      btn: "Records", title: "Battle Records", career: "Career", rate: "Win rate",
+      blocks: "Win Rate by Era (per 100 games)", blockRow: "Era {n}", current: "Current: Era {n} ({m} games in)",
+      noneBlocks: "No records yet. History will be written here—",
+      best3: "Best Point Diff (3-game run)", noneBest: "Recorded after 3+ total games",
+      diff: "Diff", gamesAt: "Games {a}-{b}",
     },
     rules: [
       "Select a card and choose to Place, Contract, or Discard",
@@ -269,6 +281,22 @@ function loadLS(key, def) {
   try { const v = localStorage.getItem(key); return v === null ? def : JSON.parse(v); } catch (e) { return def; }
 }
 function saveLS(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) {} }
+const RANK_DEFAULT = { total: 0, blocks: [], cur: { w: 0, l: 0, d: 0, pf: 0, pa: 0, n: 0 }, last2: [], best3: [] };
+function updateRank(prev, uT, aT) {
+  const r = JSON.parse(JSON.stringify(prev && typeof prev.total === "number" ? prev : RANK_DEFAULT));
+  r.total++;
+  const res = uT > aT ? "w" : uT < aT ? "l" : "d";
+  r.cur[res]++; r.cur.pf += uT; r.cur.pa += aT; r.cur.n++;
+  if (r.cur.n >= 100) { r.blocks.push({ w: r.cur.w, l: r.cur.l, d: r.cur.d, pf: r.cur.pf, pa: r.cur.pa }); r.cur = { w: 0, l: 0, d: 0, pf: 0, pa: 0, n: 0 }; }
+  const diff = uT - aT;
+  if (r.last2.length === 2) {
+    r.best3.push({ sum: r.last2[0] + r.last2[1] + diff, end: r.total, s: [r.last2[0], r.last2[1], diff] });
+    r.best3.sort((a, b) => b.sum - a.sum);
+    r.best3 = r.best3.slice(0, 5);
+  }
+  r.last2.push(diff); if (r.last2.length > 2) r.last2.shift();
+  return r;
+}
 
 // ===== ENGINE =====
 function shuffle(a){const r=[...a];for(let i=r.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[r[i],r[j]]=[r[j],r[i]];}return r;}
@@ -282,15 +310,13 @@ function getPlayableCards(hand,board){return hand.filter(c=>canPlace(c,board));}
 function getContractableDirs(board,contracts){return DIRS.filter(d=>board[d].length===0&&!contracts[d]);}
 
 function pickEvent(){
-  const pool=[{type:"wind",dir:"N"},{type:"wind",dir:"E"},{type:"wind",dir:"S"},{type:"wind",dir:"W"},
-    {type:"calm"},{type:"calm"},{type:"pirate"},{type:"pirate"},{type:"fair"},{type:"fair"}];
+  const pool=[{type:"calm"},{type:"pirate"},{type:"fair"}];
   return pool[Math.floor(Math.random()*pool.length)];
 }
 // Event-aware score: wind = x1.5 on one route (before contract doubling),
 // calm = contract penalty -10, fair = +5 flat for routes with 3+ cards
 function calcScoreEx(cards,con,dir,ev){
   let t=cards.reduce((s,c)=>s+cardVal(c),0);
-  if(ev&&ev.type==="wind"&&ev.dir===dir)t=Math.ceil(t*1.5);
   if(con)t=t*2-(ev&&ev.type==="calm"?10:20);
   if(ev&&ev.type==="fair"&&cards.length>=3)t+=5;
   return t;
@@ -298,19 +324,12 @@ function calcScoreEx(cards,con,dir,ev){
 function totalScore(board,con,ev){return DIRS.reduce((s,d)=>s+calcScoreEx(board[d],con[d],d,ev),0);}
 function eventName(ev,t){
   if(!ev)return"";
-  if(ev.type==="wind")return`${t.events.wind.name}【${t.dirs[ev.dir]}】`;
   return t.events[ev.type].name;
 }
 
 function initGame(difficulty,eventOn){
   const deck=shuffle(buildDeck());const first=Math.random()<0.5?"user":"ai";
-  let aiHand=deck.slice(7,14),rest=deck.slice(14);
-  // Hard: one opening mulligan - a weak hand goes back and gets redrawn
-  if(difficulty==="hard"&&aiHand.reduce((s,c)=>s+cardVal(c),0)<38){
-    const pool=shuffle([...aiHand,...rest]);
-    aiHand=pool.slice(0,7);rest=pool.slice(7);
-  }
-  return{deck:rest,userHand:sortCards(deck.slice(0,7)),aiHand:sortCards(aiHand),
+  return{deck:deck.slice(14),userHand:sortCards(deck.slice(0,7)),aiHand:sortCards(deck.slice(7,14)),
     userBoard:{N:[],E:[],S:[],W:[]},aiBoard:{N:[],E:[],S:[],W:[]},
     userCon:{N:false,E:false,S:false,W:false},aiCon:{N:false,E:false,S:false,W:false},
     grave:[],turnPlayer:first,turnNumber:1,phase:first==="user"?"selectCard":"aiTurn",
@@ -376,8 +395,7 @@ function countUnplaceableAfter(state,cardToPlace){
 }
 // Endgame optimizer: find optimal card placement plan from hand to maximize total score
 // Considers remaining turns to avoid placing low cards when only high cards can fit
-function findOptimalPlan(hand, board, con, remainingTurns, ev) {
-  const windDir = ev && ev.type === "wind" ? ev.dir : null;
+function findOptimalPlan(hand, board, con, remainingTurns) {
   // Group hand cards by direction (exclude 1s - they're for stealing, not scoring)
   const byDir = {};
   for (const d of DIRS) {
@@ -392,7 +410,7 @@ function findOptimalPlan(hand, board, con, remainingTurns, ev) {
     const candidates = byDir[d].filter(c => cardVal(c) > currentMax);
     if (candidates.length === 0) continue;
 
-    const multiplier = (con[d] ? 2 : 1) * (windDir === d ? 1.5 : 1);
+    const multiplier = con[d] ? 2 : 1;
 
     // We must place in ascending order; taking the highest N candidates is
     // always a valid ascending subsequence, so it's the best N-card subset.
@@ -439,9 +457,9 @@ function findOptimalPlan(hand, board, con, remainingTurns, ev) {
 }
 
 // Get the next card to play from optimal plan
-function getEndgameCard(hand, board, con, deckSize, ev) {
+function getEndgameCard(hand, board, con, deckSize) {
   const remainingTurns = Math.ceil(deckSize / 2) + 1; // +1 for current turn
-  const { plan } = findOptimalPlan(hand, board, con, remainingTurns, ev);
+  const { plan } = findOptimalPlan(hand, board, con, remainingTurns);
   if (plan.length === 0) return null;
 
   // Priority: contracted empty dirs first, then by contribution per card
@@ -496,53 +514,39 @@ function aiDecideEasy(state){
   return{action:"discard",target:hand[0]};
 }
 
-// Normal/Hard: contract evaluation -> steal -> endgame optimizer -> minimize dead cards
-function aiDecideStd(s,hard){
+// Normal: heuristic AI - contract evaluation -> steal -> endgame optimizer -> minimize dead cards
+function aiDecideStd(s){
   const hand=s.aiHand,board=s.aiBoard,con=s.aiCon,turn=s.turnNumber,ev=s.event;
-  const calm=ev&&ev.type==="calm",windDir=ev&&ev.type==="wind"?ev.dir:null;
+  const calm=ev&&ev.type==="calm";
 
   // Step 1: Contract (event-aware)
   const contractable=getContractableDirs(board,con),cc=[];
   for(const d of contractable){
     const dc=hand.filter(c=>cardDir(c)===d&&cardVal(c)>1);if(dc.length===0)continue;
     const total=dc.reduce((s2,c)=>s2+cardVal(c),0);
-    const eff=windDir===d?Math.ceil(total*1.5):total;
     const high=dc.filter(c=>cardVal(c)>=6),vhigh=dc.filter(c=>cardVal(c)>=8),minV=Math.min(...dc.map(cardVal));
     const reqA=16-(calm?4:0),reqB=23-(calm?4:0);
     let ok=false;
-    if(high.length>=2&&eff-turn>=reqA)ok=true;
-    if(!ok&&eff>=reqB){const sorted=dc.map(cardVal).sort((a,b)=>a-b);let can=true;for(let i=1;i<sorted.length;i++)if(sorted[i]<=sorted[i-1]){can=false;break;}if(can)ok=true;}
-    if(!ok&&turn<=2&&vhigh.length>=2&&!hard)ok=true;
-    if(!ok&&turn>=10&&eff>=reqB)ok=true;
-    if(ok)cc.push({dir:d,minV,pri:windDir===d?-1:0});
+    if(high.length>=2&&total-turn>=reqA)ok=true;
+    if(!ok&&total>=reqB){const sorted=dc.map(cardVal).sort((a,b)=>a-b);let can=true;for(let i=1;i<sorted.length;i++)if(sorted[i]<=sorted[i-1]){can=false;break;}if(can)ok=true;}
+    if(!ok&&turn<=2&&vhigh.length>=2)ok=true;
+    if(!ok&&turn>=10&&total>=reqB)ok=true;
+    if(ok)cc.push({dir:d,minV});
   }
-  if(cc.length>0){cc.sort((a,b)=>a.pri-b.pri||a.minV-b.minV);return{action:"contract",target:cc[0].dir};}
+  if(cc.length>0){cc.sort((a,b)=>a.minV-b.minV);return{action:"contract",target:cc[0].dir};}
 
-  // Step 2: Steal - evaluate total impact (opponent damage + card gained).
-  // Hard reads the opponent's hand for timing: if they hold higher cards for
-  // that route the prize will grow, so it waits; if not, it takes it now.
+  // Step 2: Steal - evaluate total impact (opponent damage + card gained)
   const stealCandidates=hand.filter(c=>cardVal(c)===1&&board[cardDir(c)].length===0);
   if(stealCandidates.length>0){
     const evaluated=stealCandidates.map(c=>{
       const d=cardDir(c);
       return{card:c,dir:d,value:calcStealValueEx(d,s.userBoard,s.userCon,ev)};
-    }).filter(e=>{
-      if(!hard)return e.value>=6;
-      if(s.userCon[e.dir])return e.value>=4;
-      const mx=getMaxInRoute(s.userBoard,e.dir);
-      const willGrow=s.userHand.some(c2=>cardDir(c2)===e.dir&&cardVal(c2)>mx);
-      return willGrow?e.value>=14:e.value>=6;
-    }).sort((a,b)=>b.value-a.value);
+    }).filter(e=>e.value>=6).sort((a,b)=>b.value-a.value);
     if(evaluated.length>0)return{action:"place",target:evaluated[0].card};
   }
 
   // === ENDGAME MODE ===
-  const egThresh=14;
-  if(s.deck.length<=egThresh){
-    const endgameCard=getEndgameCard(hand,board,con,s.deck.length,ev);
-    // Hard compares a steal against the value of its best placement this turn
-    let egValue=0;
-    if(endgameCard){const egd=cardDir(endgameCard);egValue=cardVal(endgameCard)*(con[egd]?2:1)*(windDir===egd?1.5:1);}
+  if(s.deck.length<=14){
     if(stealCandidates.length>0){
       const endgameSteals=stealCandidates.map(c=>{
         const d=cardDir(c);
@@ -552,20 +556,19 @@ function aiDecideStd(s,hard){
         const bonus=s.userCon[d]?20:0; // Extra weight for disrupting contracts
         return{card:c,netGain:stealVal+bonus};
       }).filter(e=>e.netGain>0).sort((a,b)=>b.netGain-a.netGain);
-      if(endgameSteals.length>0&&(!hard||endgameSteals[0].netGain>=egValue))return{action:"place",target:endgameSteals[0].card};
+      if(endgameSteals.length>0)return{action:"place",target:endgameSteals[0].card};
     }
+    const endgameCard=getEndgameCard(hand,board,con,s.deck.length);
     if(endgameCard)return{action:"place",target:endgameCard};
   }
 
   // === NORMAL MODE: minimize unplaceable cards ===
-  // Hard also avoids occupying a route where it still holds a live steal-1
   const playable=getPlayableCards(hand,board).filter(c=>{if(cardVal(c)===1&&!con[cardDir(c)])return false;return true;});
   if(playable.length>0){
     let best=null,bs=Infinity;
     for(const card of playable){
-      const d=cardDir(card),up=countUnplaceableAfter(s,card),hc=board[d].length>0?0:1,ce=(con[d]&&board[d].length===0)?-500:0,cb=con[d]?-50:0,wb=(hard&&windDir===d)?-8:0;
-      const killsOwnOne=(hard&&cardVal(card)>1&&board[d].length===0&&hand.some(c2=>c2!==card&&cardDir(c2)===d&&cardVal(c2)===1))?40:0;
-      const score=up*100+hc+ce+cb+wb+killsOwnOne;
+      const d=cardDir(card),up=countUnplaceableAfter(s,card),hc=board[d].length>0?0:1,ce=(con[d]&&board[d].length===0)?-500:0,cb=con[d]?-50:0;
+      const score=up*100+hc+ce+cb;
       if(score<bs){bs=score;best=card;}}
     if(best)return{action:"place",target:best};
   }
@@ -579,7 +582,114 @@ function aiDecideStd(s,hard){
 function aiDecide(state){
   const diff=state.difficulty||"normal";
   if(diff==="easy")return aiDecideEasy(state);
-  return aiDecideStd(state,diff==="hard");
+  if(diff==="hard")return aiDecideHard(state);
+  return aiDecideStd(state);
+}
+
+// ===== HARD: Monte-Carlo search =====
+// For each candidate move, deal the unseen cards randomly (opponent hand + deck),
+// play the game to the end many times with a fast policy for both sides, and
+// pick the move with the best average final score difference.
+function copyBoards(b){return{N:[...b.N],E:[...b.E],S:[...b.S],W:[...b.W]};}
+function fastMax(cards){let m=0;for(let i=0;i<cards.length;i++){const v=cardVal(cards[i]);if(v>m)m=v;}return m;}
+function mcDraw(st,who){if(st.deck.length>0)st.hands[who].push(st.deck.pop());}
+function mcApply(st,who,mv,ev){
+  const opp=who==="ai"?"user":"ai";
+  const hand=st.hands[who];
+  if(mv.action==="contract"){st.cons[who][mv.target]=true;return;}
+  if(mv.action==="discard"){const i=hand.indexOf(mv.target);if(i>=0)hand.splice(i,1);mcDraw(st,who);return;}
+  const c=mv.target,d=cardDir(c),v=cardVal(c),i=hand.indexOf(c);
+  if(i<0)return;
+  hand.splice(i,1);st.boards[who][d].push(c);
+  if(v===1){
+    const oc=st.boards[opp][d];
+    if(oc.length>0){hand.push(oc.pop());if(ev&&ev.type==="pirate")mcDraw(st,who);}
+    else mcDraw(st,who);
+  }else mcDraw(st,who);
+}
+// Fast rollout policy (no lookahead - both sides use it, so playouts stay fair)
+function mcPolicy(hand,myBoard,oppBoard,myCon,ev){
+  const calm=ev&&ev.type==="calm";
+  for(const d of DIRS){
+    if(myBoard[d].length===0&&!myCon[d]){
+      let total=0;for(const c of hand){if(cardDir(c)===d&&cardVal(c)>1)total+=cardVal(c);}
+      if(total>=23-(calm?4:0))return{action:"contract",target:d};
+    }
+  }
+  let bestSteal=null,bsv=5;
+  for(const c of hand){
+    if(cardVal(c)===1&&myBoard[cardDir(c)].length===0){
+      const oc=oppBoard[cardDir(c)];
+      if(oc.length>0){const v=2*fastMax(oc);if(v>bsv){bsv=v;bestSteal=c;}}
+    }
+  }
+  if(bestSteal)return{action:"place",target:bestSteal};
+  let best=null,bk=1e9;
+  for(const c of hand){
+    const v=cardVal(c),d=cardDir(c);
+    if(v===1){if(myCon[d]&&myBoard[d].length===0&&oppBoard[d].length===0){if(60<bk){bk=60;best=c;}}continue;}
+    if(v>fastMax(myBoard[d])){const k=v+(myBoard[d].length===0?20:0)-(myCon[d]?30:0);if(k<bk){bk=k;best=c;}}
+  }
+  if(best)return{action:"place",target:best};
+  let dc=null,dv=1e9;
+  for(const c of hand){
+    const v=cardVal(c),d=cardDir(c);
+    const dead=v===1?myBoard[d].length>0:v<=fastMax(myBoard[d]);
+    if(dead&&v<dv){dv=v;dc=c;}
+  }
+  if(!dc)for(const c of hand){const v=cardVal(c);if(v<dv){dv=v;dc=c;}}
+  return{action:"discard",target:dc};
+}
+function mcPlayout(st,firstMove,ev){
+  mcApply(st,"ai",firstMove,ev);
+  let turn="user",guard=0;
+  while(st.deck.length>0&&guard++<100){
+    const opp=turn==="ai"?"user":"ai";
+    const mv=mcPolicy(st.hands[turn],st.boards[turn],st.boards[opp],st.cons[turn],ev);
+    mcApply(st,turn,mv,ev);
+    turn=opp;
+  }
+  return totalScore(st.boards.ai,st.cons.ai,ev)-totalScore(st.boards.user,st.cons.user,ev);
+}
+function aiDecideHard(state){
+  const s=state,ev=s.event;
+  const cands=[];
+  for(const c of getPlayableCards(s.aiHand,s.aiBoard)){
+    // skip pure waste: a 1 on an uncontracted route with nothing to steal
+    if(cardVal(c)===1&&!s.aiCon[cardDir(c)]&&s.userBoard[cardDir(c)].length===0)continue;
+    cands.push({action:"place",target:c});
+  }
+  for(const d of getContractableDirs(s.aiBoard,s.aiCon)){
+    const total=s.aiHand.reduce((a,c)=>a+(cardDir(c)===d&&cardVal(c)>1?cardVal(c):0),0);
+    if(total>=10)cands.push({action:"contract",target:d});
+  }
+  const dead=s.aiHand.filter(c=>!canPlace(c,s.aiBoard)).sort((a,b)=>cardVal(a)-cardVal(b));
+  const discardTarget=dead.length>0?dead[0]:[...s.aiHand].sort((a,b)=>cardVal(a)-cardVal(b))[0];
+  if(discardTarget)cands.push({action:"discard",target:discardTarget});
+  if(cands.length===0)return aiDecideStd(s);
+  if(cands.length===1)return cands[0];
+  const unknown=getUnknownCards(s);
+  const uhs=s.userHand.length;
+  const K=48;
+  // Paired comparison: every candidate is evaluated on the SAME K deals,
+  // so differences come from the move itself, not the luck of the deal.
+  const worlds=[];
+  for(let k=0;k<K;k++)worlds.push(shuffle(unknown));
+  let best=cands[0],bestAvg=-Infinity;
+  for(const cand of cands){
+    let sum=0;
+    for(let k=0;k<K;k++){
+      const un=worlds[k];
+      const st={deck:un.slice(uhs),
+        hands:{ai:[...s.aiHand],user:un.slice(0,uhs)},
+        boards:{ai:copyBoards(s.aiBoard),user:copyBoards(s.userBoard)},
+        cons:{ai:{...s.aiCon},user:{...s.userCon}}};
+      sum+=mcPlayout(st,cand,ev);
+    }
+    const avg=sum/K;
+    if(avg>bestAvg){bestAvg=avg;best=cand;}
+  }
+  return best;
 }
 
 function getDandolo(lang,action,state){
@@ -614,15 +724,13 @@ function HandCard({card,selected,onClick,lang,idx}){
     <div style={{fontSize:22,fontWeight:800,color,lineHeight:1}}>{v}</div>
   </div>);
 }
-function DirectionRow({dir,aiCards,userCards,aiCon,userCon,aiScore,userScore,lang,lastPlaced,windDir}){
+function DirectionRow({dir,aiCards,userCards,aiCon,userCon,aiScore,userScore,lang,lastPlaced}){
   const t=TEXTS[lang],color=DIR_COLORS[dir];
   const isAiLast=lastPlaced&&lastPlaced.player==="ai"&&lastPlaced.dir===dir;
   const isUserLast=lastPlaced&&lastPlaced.player==="user"&&lastPlaced.dir===dir;
   const isStealFlash=lastPlaced&&lastPlaced.steal&&lastPlaced.dir===dir;
   return(<div style={{background:DIR_LIGHT[dir],border:`1px solid ${color}33`,borderRadius:8,padding:"6px 8px",marginBottom:6,animation:isStealFlash?"stealFlash .8s ease":undefined}}>
-    <div style={{fontSize:14,fontWeight:800,color,marginBottom:4,display:"flex",alignItems:"center"}}>{t.dirs[dir]}
-      {windDir===dir&&<span style={{fontSize:9,background:"#D4A76A",color:"#fff",borderRadius:3,padding:"1px 5px",marginLeft:6,fontWeight:700}}>💨 ×1.5</span>}
-    </div>
+    <div style={{fontSize:14,fontWeight:800,color,marginBottom:4}}>{t.dirs[dir]}</div>
     <div style={{display:"flex",alignItems:"center",gap:4,minHeight:52,padding:"3px 0",borderBottom:`1px dashed ${color}33`}}>
       <div style={{width:58,fontSize:10,flexShrink:0,display:"flex",flexDirection:"column",alignItems:"flex-start"}}><span style={{fontWeight:700,color:"#5C3317"}}>{t.dandolo}</span>{aiCon&&<span style={{fontSize:8,background:color,color:"#fff",borderRadius:3,padding:"1px 4px",marginTop:1}}>{t.contracted}</span>}</div>
       <div style={{display:"flex",gap:3,flex:1,flexWrap:"wrap"}}>{aiCards.length===0?<span style={{color:"#CCC",fontSize:11,fontStyle:"italic",padding:"12px 0"}}>—</span>:aiCards.map((c,i)=><MiniCard key={i} card={c} lang={lang} isLastPlaced={isAiLast&&i===aiCards.length-1}/>)}</div>
@@ -681,6 +789,8 @@ function App(){
   const[career,setCareer]=useState(()=>{const c=loadLS("vm_career",null);return(c&&typeof c.games==="number")?c:{games:0,wins:0,losses:0,draws:0};});
   const[ach,setAch]=useState(()=>{const a=loadLS("vm_ach",null);return Array.isArray(a)?a:[];});
   const[toasts,setToasts]=useState([]);
+  const[rank,setRank]=useState(()=>{const r=loadLS("vm_rank",null);return(r&&typeof r.total==="number")?r:RANK_DEFAULT;});
+  const[showRank,setShowRank]=useState(false);
   const aiTimerRef=useRef(null);
   const aiTimer2Ref=useRef(null);
   const toastKeyRef=useRef(0);
@@ -737,6 +847,7 @@ function App(){
     if(fresh.length>0){const na=[...unlocked];setAch(na);saveLS("vm_ach",na);
       fresh.forEach((id,i)=>setTimeout(()=>{pushToast(id);SFX.play("achieve");},700+i*900));}
     setTimeout(()=>SFX.play(win?"win":uT<aT?"lose":"tie"),250);
+    setRank(prev=>{const nr=updateRank(prev,uT,aT);saveLS("vm_rank",nr);return nr;});
     setGame(prev=>({...prev,_recorded:true}));
   },[game?.gameOver]);
 
@@ -787,6 +898,41 @@ function App(){
     </div>
   </div>);
 
+  const rankModal=showRank&&(()=>{
+    const medals=["🥇","🥈","🥉","4.","5."];
+    const wr=(w,n)=>n>0?Math.round(w/n*100):0;
+    const sgn=(v)=>(v>0?"+":"")+v;
+    const careerRate=career.games>0?Math.round(career.wins/career.games*100):0;
+    return(<div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}} onClick={()=>setShowRank(false)}>
+    <div style={{background:"#F5ECD7",padding:20,borderRadius:12,maxWidth:420,width:"calc(100% - 32px)",margin:16,border:"2px solid #C4A882",maxHeight:"85vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+      <h3 style={{margin:"0 0 8px",color:"#5C3317"}}>📊 {t.rank.title}</h3>
+      <div style={{fontSize:12,color:"#8B7355",marginBottom:12}}>{t.rank.career}: {career.games}{t.stats.g} {career.wins}{t.stats.w} {career.losses}{t.stats.l} {career.draws}{t.stats.d}（{t.rank.rate} {careerRate}%）</div>
+      <div style={{fontSize:13,fontWeight:700,color:"#5C3317",marginBottom:6}}>📈 {t.rank.blocks}</div>
+      {rank.blocks.length===0&&rank.cur.n===0&&<div style={{fontSize:12,color:"#8B7355",marginBottom:10,fontStyle:"italic"}}>{t.rank.noneBlocks}</div>}
+      {rank.blocks.map((b,i)=>{const n=b.w+b.l+b.d,rt=wr(b.w,n);return(<div key={i} style={{marginBottom:8}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#5C4033"}}>
+          <span style={{fontWeight:700}}>{t.rank.blockRow.replace("{n}",i+1)}</span>
+          <span>{b.w}{t.stats.w}{b.l}{t.stats.l}{b.d}{t.stats.d}・{rt}%・{t.rank.diff}{sgn(b.pf-b.pa)}</span>
+        </div>
+        <div style={{height:7,background:"#E0D4BC",borderRadius:4,overflow:"hidden",marginTop:2}}><div style={{width:`${rt}%`,height:"100%",background:rt>=50?"#27AE60":"#C0392B",transition:"width .3s"}}/></div>
+      </div>);})}
+      {rank.cur.n>0&&(()=>{const b=rank.cur,rt=wr(b.w,b.n);return(<div style={{marginBottom:8,opacity:0.85}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#8B7355"}}>
+          <span style={{fontWeight:700}}>{t.rank.current.replace("{n}",rank.blocks.length+1).replace("{m}",b.n)}</span>
+          <span>{b.w}{t.stats.w}{b.l}{t.stats.l}{b.d}{t.stats.d}・{rt}%・{t.rank.diff}{sgn(b.pf-b.pa)}</span>
+        </div>
+        <div style={{height:7,background:"#E0D4BC",borderRadius:4,overflow:"hidden",marginTop:2}}><div style={{width:`${rt}%`,height:"100%",background:"#B8952E"}}/></div>
+      </div>);})()}
+      <div style={{fontSize:13,fontWeight:700,color:"#5C3317",margin:"14px 0 6px"}}>🏅 {t.rank.best3}</div>
+      {rank.best3.length===0&&<div style={{fontSize:12,color:"#8B7355",fontStyle:"italic"}}>{t.rank.noneBest}</div>}
+      {rank.best3.map((b,i)=>(<div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 4px",borderBottom:"1px solid #E0D4BC",fontSize:12,color:"#5C4033"}}>
+        <span style={{width:24,fontSize:i<3?16:12,textAlign:"center"}}>{medals[i]}</span>
+        <b style={{color:b.sum>=0?"#27AE60":"#C0392B",fontSize:14,width:48}}>{sgn(b.sum)}</b>
+        <span style={{color:"#8B7355"}}>{t.rank.gamesAt.replace("{a}",b.end-2).replace("{b}",b.end)}（{b.s.map(sgn).join(" / ")}）</span>
+      </div>))}
+      <button onClick={()=>setShowRank(false)} style={{marginTop:14,padding:"8px 24px",background:"#8B4513",color:"#F5ECD7",border:"none",borderRadius:6,cursor:"pointer"}}>{t.close}</button>
+    </div>
+  </div>);})();
   const rulesModal=showRules&&(<div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}} onClick={()=>setShowRules(false)}>
     <div style={{background:"#F5ECD7",padding:24,borderRadius:12,maxWidth:400,margin:16,border:"2px solid #C4A882",maxHeight:"85vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
       <h3 style={{margin:"0 0 12px",color:"#5C3317"}}>{t.howToPlay}</h3>
@@ -817,19 +963,20 @@ function App(){
         <button onClick={()=>setLang(lang==="ja"?"en":"ja")} style={{padding:"6px 16px",fontSize:12,background:"transparent",border:"1px solid #C4A882",borderRadius:4,cursor:"pointer",color:"#5C3317",fontFamily:"inherit"}}>{lang==="ja"?"English":"日本語"}</button>
         <button onClick={()=>setShowRules(true)} style={{padding:"6px 16px",fontSize:12,background:"transparent",border:"1px solid #C4A882",borderRadius:4,cursor:"pointer",color:"#5C3317",fontFamily:"inherit"}}>{t.howToPlay}</button>
         <button data-tid="ach-btn" onClick={()=>setShowAch(true)} style={{padding:"6px 16px",fontSize:12,background:"transparent",border:"1px solid #C4A882",borderRadius:4,cursor:"pointer",color:"#5C3317",fontFamily:"inherit"}}>🏆 {t.ach.btn} ({ach.length}/{ACH_IDS.length})</button>
+        <button data-tid="rank-btn" onClick={()=>setShowRank(true)} style={{padding:"6px 16px",fontSize:12,background:"transparent",border:"1px solid #C4A882",borderRadius:4,cursor:"pointer",color:"#5C3317",fontFamily:"inherit"}}>📊 {t.rank.btn}</button>
         {muteBtn}
       </div>
-      <div style={{marginTop:32,fontSize:11,color:"#B8A88A"}}>v2.0 &copy; {t.credit}</div>
+      <div style={{marginTop:32,fontSize:11,color:"#B8A88A"}}>v2.2 &copy; {t.credit}</div>
     </div>
     {rulesModal}
     {achModal}
+    {rankModal}
   </div>);}
 
   // GAME
   const userTotal=totalScore(game.userBoard,game.userCon,game.event),aiTotal=totalScore(game.aiBoard,game.aiCon,game.event);
   const isUserTurn=game.turnPlayer==="user"&&!game.gameOver,sel=game.selectedCard;
   const canPlaceSel=sel&&canPlace(sel,game.userBoard),conDirs=getContractableDirs(game.userBoard,game.userCon);
-  const windDir=game.event&&game.event.type==="wind"?game.event.dir:null;
   const userWon=game.gameOver&&userTotal>aiTotal;
 
   return(<div style={base}>
@@ -860,7 +1007,7 @@ function App(){
       <div style={{fontSize:14,color:"#C4A882",alignSelf:"center",fontWeight:700}}>{t.vs}</div>
       <div style={{textAlign:"center"}}><div style={{fontSize:10,color:"#2471A3",fontWeight:700}}>{t.you}</div><div key={`u${userTotal}`} style={{fontSize:22,fontWeight:800,color:"#2471A3",animation:"scorePop .25s ease"}}>{userTotal}</div></div>
     </div>
-    {DIRS.map(d=><DirectionRow key={d} dir={d} lang={lang} aiCards={game.aiBoard[d]} userCards={game.userBoard[d]} aiCon={game.aiCon[d]} userCon={game.userCon[d]} aiScore={calcScoreEx(game.aiBoard[d],game.aiCon[d],d,game.event)} userScore={calcScoreEx(game.userBoard[d],game.userCon[d],d,game.event)} lastPlaced={game.lastPlaced} windDir={windDir}/>)}
+    {DIRS.map(d=><DirectionRow key={d} dir={d} lang={lang} aiCards={game.aiBoard[d]} userCards={game.userBoard[d]} aiCon={game.aiCon[d]} userCon={game.userCon[d]} aiScore={calcScoreEx(game.aiBoard[d],game.aiCon[d],d,game.event)} userScore={calcScoreEx(game.userBoard[d],game.userCon[d],d,game.event)} lastPlaced={game.lastPlaced}/>)}
     {game.gameOver&&(<div style={{textAlign:"center",padding:20,margin:"12px 0",background:"linear-gradient(135deg,#5C3317,#8B4513)",borderRadius:12,color:"#F5ECD7",animation:"bannerIn .4s ease both"}}>
       <div style={{fontSize:18,fontWeight:800,marginBottom:4}}>{t.gameOver}</div>
       <div style={{fontSize:11,opacity:0.85,marginBottom:8}}>{t.difficulty[game.difficulty]}{game.event?` ・ ${EVENT_ICONS[game.event.type]} ${eventName(game.event,t)}`:""}</div>
@@ -900,7 +1047,7 @@ function App(){
       <div style={{fontWeight:700,marginBottom:3}}>📜 {t.log}</div>
       {game.logs.slice(-4).map((entry,i)=><div key={i} style={{padding:"2px 0",borderBottom:"1px solid #D4C4A8",opacity:0.55+(i*0.15)}}>{renderLog(entry,lang)}</div>)}
     </div>)}
-    <div style={{textAlign:"center",marginTop:16,paddingBottom:12,fontSize:10,color:"#B8A88A"}}>v2.0 &copy; {t.credit}</div>
+    <div style={{textAlign:"center",marginTop:16,paddingBottom:12,fontSize:10,color:"#B8A88A"}}>v2.2 &copy; {t.credit}</div>
     {rulesModal}
     {achModal}
   </div>);
