@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 公開先: GitHub Pages https://shigetane2011-cell.github.io/venetian-merchant/ （main ブランチ直下の index.html をそのまま配信）
 - ビルド工程なし。`index.html` 1枚にすべて入っている（React 18 UMD + Babel standalone を cdnjs から読み込み、`<script type="text/babel">` 内に JSX を直書き）
 - npm / テストランナー / Lint は無い。動作確認はブラウザで index.html を開くか、公開ページで行う
-- 現在の表示バージョンは v2.2（index.html 内の2か所に文字列として埋め込み。更新時は両方直す）
+- 現在の表示バージョンは v2.3（index.html 内の2か所に文字列として埋め込み。更新時は両方直す）
 
 ## ゲームルール（index.html の TEXTS.rules と一致させること）
 
@@ -35,11 +35,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 238〜277 | `SFX` Web Audio による効果音（外部ファイル無し） |
 | 279〜299 | localStorage 読み書きと `updateRank`（100戦ごとの期間別成績、ベスト3連戦） |
 | 301〜379 | エンジン: `initGame` / `processTurn` / `calcScoreEx` / `totalScore` など純粋関数 |
-| 381〜693 | ダンドロAI: `aiDecideEasy`（わざと悪手）/ `aiDecideStd`（契約→強奪→終盤最適化→死に札最小化）/ `aiDecideHard`（モンテカルロ、同一48通りの配りで候補手を比較） |
-| 695〜707 | `getDandolo` セリフと表情 |
-| 709〜777 | 小コンポーネント（MiniCard / HandCard / DirectionRow / StatsBar / Confetti / DandoloBar） |
-| 779〜1055 | `App`（タイトル画面・ゲーム画面・実績/記録/遊び方モーダル） |
-| 1058 | `window.__VM` にエンジンと `aiDecide` を公開（自動テスト用） |
+| 381〜750 | ダンドロAI: `aiDecideEasy`（わざと悪手）/ `aiDecideStd`（契約→強奪→終盤最適化→死に札最小化）/ `aiDecideHard`（下記） |
+| 752〜764 | `getDandolo` セリフと表情 |
+| 766〜834 | 小コンポーネント（MiniCard / HandCard / DirectionRow / StatsBar / Confetti / DandoloBar） |
+| 836〜1112 | `App`（タイトル画面・ゲーム画面・実績/記録/遊び方モーダル） |
+| 1115 | `window.__VM` にエンジンと `aiDecide` を公開（自動テスト用） |
 
 ## localStorage キー
 
@@ -53,4 +53,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Google Analytics の測定ID未設定
 - README が無い（LICENSE は MIT）
-- 難易度「難しい」はモンテカルロだが、「普通」との AI 対戦で勝率が 5〜6割程度にとどまる（2026-10-20 に20戦で確認）。強さの差が小さい
+
+## 難易度「難しい」(aiDecideHard) の仕組み — v2.3 (2026-10-20)
+
+見えない札（相手手札＋山札）をランダムに配り直した「世界」を最大48通り作り、全候補手を同じ世界で比較する（対にして比べるので配りの運が差に出ない）。各世界では候補手のあと両者が高速方針 `mcPolicy` で8手進め、その局面を静的評価（盤面点＋手札から残りターン内に置ける最善プラン `findOptimalPlan` の0.9倍）する（ロールアウト中に山札が尽きたら実際の最終得点）。ロールアウト方針は終盤（置ける枚数≥残り手番）だけ `getEndgameCard` の最善プランに切り替える。1手あたり約20〜35ms、上限 `HARD_BUDGET_MS`=400ms。カンニング（相手手札や山札順の参照）は一切しない。
+
+- 先延ばし対策: いま可能な強奪・契約は、他の候補手のロールアウト中にAI側が実行できないようにしてある（`excl`）。これが無いと「次の手番でもできる」と見なして毎回先送りし、結局やらない（旧Hardが契約済みN9を目の前にして強奪しなかった原因）
+- 強奪の条件 `stealWorthIt`: 相手の一番上が6以上／その航路が契約済み／山札10枚以下、のいずれかのときだけ「1」を出す候補に入れる（小物を早く奪うと「1」の無駄遣いになるため。候補生成とロールアウト方針の両方で同じ条件）
+- 契約は「1」の所在で判断が変わる: 相手に奪われると2倍の損なので、その方角の1が未確認だと E8 E9 E10 でも半々程度、1が自分の手札・捨て札・盤面にあれば即契約する（これは合理的な挙動）
+- 捨て札候補は「死に札の最小」→無ければ最小札だが、まだ強奪に使える「1」は捨てない
+- 検証台（セッション限りの scratchpad/harness、Node で index.html のエンジン部分を切り出してAI同士を数百戦）での実測: 普通に対して約62〜65%（旧Hardは58%）、旧Hardとの直接対戦は約50%（誤差±5%）。真の配りを知る「カンニング」版は89%で、差はすべて山札の順番によるもの（相手手札を知っても65%のまま）＝この枠組みの伸びしろはほぼ尽きている
+- 試して効かなかったもの: 世界数を200に増やす、ロールアウト方針を賢くする（Std流用・プラン型）、相手の最善応手を読む2手読み、強奪リスク項、航路の伸びしろ項、勝率目的関数、普通AIの判断への加点、山札4〜7枚以下でのαβ完全読み切り（勝率は変わらず、自由行動（契約）で分岐が爆発して数十秒かかる局面があるため外した）
+- 局面テストを自作するときの注意: 未知札＝相手手札＋山札になるよう、残りは grave に入れること。そうしないとAIは山札を実際より多いと誤認する

@@ -586,10 +586,19 @@ function aiDecide(state){
   return aiDecideStd(state);
 }
 
-// ===== HARD: Monte-Carlo search =====
-// For each candidate move, deal the unseen cards randomly (opponent hand + deck),
-// play the game to the end many times with a fast policy for both sides, and
-// pick the move with the best average final score difference.
+// ===== HARD: determinized search (truncated rollouts + static evaluation) =====
+// The unseen cards (opponent hand + deck) are dealt at random many times ("worlds"). Every
+// candidate move is tried on the same worlds (paired comparison), then both sides play
+// HARD_PLIES moves with the fast rollout policy and the position is scored statically
+// (board score + best placement plan still achievable from the hand). When the deck runs
+// out inside the rollout the real final score is used. Nothing hidden is ever read: the AI
+// only sees its own hand, both boards and the discard pile.
+// Anti-procrastination: a steal or contract available now is forbidden to the AI inside the
+// rollouts of the OTHER candidates, so "I can do it next turn" never makes it defer forever.
+const HARD_PLIES=8,HARD_PLAN_W=0.9,HARD_WORLDS=48,HARD_WORLDS_MIN=16,HARD_BUDGET_MS=400;
+// A steal is worth spending the 1 on only when the opponent's top card is big, contracted, or the game is ending
+const HARD_STEAL_MIN_TOP=6,HARD_STEAL_LATE_DECK=10;
+function stealWorthIt(oppCards,oppContracted,deckLen){return oppCards.length>0&&(fastMax(oppCards)>=HARD_STEAL_MIN_TOP||oppContracted||deckLen<=HARD_STEAL_LATE_DECK);}
 function copyBoards(b){return{N:[...b.N],E:[...b.E],S:[...b.S],W:[...b.W]};}
 function fastMax(cards){let m=0;for(let i=0;i<cards.length;i++){const v=cardVal(cards[i]);if(v>m)m=v;}return m;}
 function mcDraw(st,who){if(st.deck.length>0)st.hands[who].push(st.deck.pop());}
@@ -607,23 +616,28 @@ function mcApply(st,who,mv,ev){
     else mcDraw(st,who);
   }else mcDraw(st,who);
 }
-// Fast rollout policy (no lookahead - both sides use it, so playouts stay fair)
-function mcPolicy(hand,myBoard,oppBoard,myCon,ev){
+// Fast rollout policy (no lookahead - both sides use it, so playouts stay fair).
+// excl: free actions ("cN" = contract N, "pN1" = place N1) this side may not take in this rollout.
+function mcPolicy(hand,myBoard,oppBoard,myCon,oppCon,ev,excl,deckLen){
   const calm=ev&&ev.type==="calm";
   for(const d of DIRS){
-    if(myBoard[d].length===0&&!myCon[d]){
+    if(myBoard[d].length===0&&!myCon[d]&&!(excl&&excl.has("c"+d))){
       let total=0;for(const c of hand){if(cardDir(c)===d&&cardVal(c)>1)total+=cardVal(c);}
       if(total>=23-(calm?4:0))return{action:"contract",target:d};
     }
   }
-  let bestSteal=null,bsv=5;
+  let bestSteal=null,bsv=0;
   for(const c of hand){
-    if(cardVal(c)===1&&myBoard[cardDir(c)].length===0){
-      const oc=oppBoard[cardDir(c)];
-      if(oc.length>0){const v=2*fastMax(oc);if(v>bsv){bsv=v;bestSteal=c;}}
+    const d=cardDir(c);
+    if(cardVal(c)===1&&myBoard[d].length===0&&!(excl&&excl.has("p"+c))&&stealWorthIt(oppBoard[d],oppCon[d],deckLen)){
+      const v=fastMax(oppBoard[d])*(oppCon[d]?2:1);if(v>bsv){bsv=v;bestSteal=c;}
     }
   }
   if(bestSteal)return{action:"place",target:bestSteal};
+  // endgame: not enough turns to place everything -> follow the best-scoring plan instead of "lowest card first"
+  const myTurns=Math.ceil(deckLen/2);
+  let np=0;for(const c of hand){const v=cardVal(c);if(v>1&&v>fastMax(myBoard[cardDir(c)]))np++;}
+  if(np>=myTurns){const eg=getEndgameCard(hand,myBoard,myCon,deckLen);if(eg)return{action:"place",target:eg};}
   let best=null,bk=1e9;
   for(const c of hand){
     const v=cardVal(c),d=cardDir(c);
@@ -640,55 +654,75 @@ function mcPolicy(hand,myBoard,oppBoard,myCon,ev){
   if(!dc)for(const c of hand){const v=cardVal(c);if(v<dv){dv=v;dc=c;}}
   return{action:"discard",target:dc};
 }
-function mcPlayout(st,firstMove,ev){
-  mcApply(st,"ai",firstMove,ev);
-  let turn="user",guard=0;
-  while(st.deck.length>0&&guard++<100){
+// Static value of one side: board score + best plan from hand in the turns left
+function mcSideValue(board,con,hand,ev,turnsLeft){
+  let v=totalScore(board,con,ev);
+  if(turnsLeft>0)v+=findOptimalPlan(hand,board,con,turnsLeft).total*HARD_PLAN_W;
+  return v;
+}
+function mcLeaf(st,turn,ev){
+  if(st.deck.length===0)return totalScore(st.boards.ai,st.cons.ai,ev)-totalScore(st.boards.user,st.cons.user,ev);
+  const d=st.deck.length,tlMover=Math.ceil(d/2),tlOther=Math.floor(d/2);
+  const tlAi=turn==="ai"?tlMover:tlOther,tlUser=turn==="user"?tlMover:tlOther;
+  return mcSideValue(st.boards.ai,st.cons.ai,st.hands.ai,ev,tlAi)-mcSideValue(st.boards.user,st.cons.user,st.hands.user,ev,tlUser);
+}
+function mcRollout(st,ev,excl){
+  let turn="user",n=0;
+  while(st.deck.length>0&&n<HARD_PLIES){
     const opp=turn==="ai"?"user":"ai";
-    const mv=mcPolicy(st.hands[turn],st.boards[turn],st.boards[opp],st.cons[turn],ev);
-    mcApply(st,turn,mv,ev);
-    turn=opp;
+    mcApply(st,turn,mcPolicy(st.hands[turn],st.boards[turn],st.boards[opp],st.cons[turn],st.cons[opp],ev,turn==="ai"?excl:null,st.deck.length),ev);
+    turn=opp;n++;
   }
-  return totalScore(st.boards.ai,st.cons.ai,ev)-totalScore(st.boards.user,st.cons.user,ev);
+  return mcLeaf(st,turn,ev);
 }
 function aiDecideHard(state){
   const s=state,ev=s.event;
   const cands=[];
   for(const c of getPlayableCards(s.aiHand,s.aiBoard)){
-    // skip pure waste: a 1 on an uncontracted route with nothing to steal
-    if(cardVal(c)===1&&!s.aiCon[cardDir(c)]&&s.userBoard[cardDir(c)].length===0)continue;
+    if(cardVal(c)===1){
+      const d=cardDir(c);
+      // a 1 is for stealing: wait for a target worth it (or a contracted route of mine that needs a base card)
+      if(s.userBoard[d].length===0){if(!s.aiCon[d])continue;}
+      else if(!stealWorthIt(s.userBoard[d],s.userCon[d],s.deck.length))continue;
+    }
     cands.push({action:"place",target:c});
   }
   for(const d of getContractableDirs(s.aiBoard,s.aiCon)){
     const total=s.aiHand.reduce((a,c)=>a+(cardDir(c)===d&&cardVal(c)>1?cardVal(c):0),0);
     if(total>=10)cands.push({action:"contract",target:d});
   }
+  // discard: lowest dead card, else lowest card - but never a 1 that can still steal
   const dead=s.aiHand.filter(c=>!canPlace(c,s.aiBoard)).sort((a,b)=>cardVal(a)-cardVal(b));
-  const discardTarget=dead.length>0?dead[0]:[...s.aiHand].sort((a,b)=>cardVal(a)-cardVal(b))[0];
+  const pool=dead.length>0?dead:[...s.aiHand].sort((a,b)=>cardVal(a)-cardVal(b));
+  const discardTarget=pool.find(c=>!(cardVal(c)===1&&s.aiBoard[cardDir(c)].length===0))||pool[0];
   if(discardTarget)cands.push({action:"discard",target:discardTarget});
   if(cands.length===0)return aiDecideStd(s);
   if(cands.length===1)return cands[0];
   const unknown=getUnknownCards(s);
   const uhs=s.userHand.length;
-  const K=48;
-  // Paired comparison: every candidate is evaluated on the SAME K deals,
-  // so differences come from the move itself, not the luck of the deal.
-  const worlds=[];
-  for(let k=0;k<K;k++)worlds.push(shuffle(unknown));
-  let best=cands[0],bestAvg=-Infinity;
-  for(const cand of cands){
-    let sum=0;
-    for(let k=0;k<K;k++){
-      const un=worlds[k];
+  // free actions available right now
+  const free=new Set();
+  for(const c of cands){if(c.action==="contract")free.add("c"+c.target);else if(c.action==="place"&&cardVal(c.target)===1)free.add("p"+c.target);}
+  const keys=cands.map(c=>c.action==="contract"?"c"+c.target:c.action==="place"?"p"+c.target:"d");
+  const excls=keys.map(k=>{const e=new Set();free.forEach(f=>{if(f!==k)e.add(f);});return e;});
+  const sums=new Array(cands.length).fill(0);
+  const t0=Date.now();
+  let k=0;
+  while(k<HARD_WORLDS){
+    const un=shuffle(unknown);
+    for(let i=0;i<cands.length;i++){
       const st={deck:un.slice(uhs),
         hands:{ai:[...s.aiHand],user:un.slice(0,uhs)},
         boards:{ai:copyBoards(s.aiBoard),user:copyBoards(s.userBoard)},
         cons:{ai:{...s.aiCon},user:{...s.userCon}}};
-      sum+=mcPlayout(st,cand,ev);
+      mcApply(st,"ai",cands[i],ev);
+      sums[i]+=mcRollout(st,ev,excls[i]);
     }
-    const avg=sum/K;
-    if(avg>bestAvg){bestAvg=avg;best=cand;}
+    k++;
+    if(k>=HARD_WORLDS_MIN&&Date.now()-t0>HARD_BUDGET_MS)break;
   }
+  let best=cands[0],bestSum=-Infinity;
+  for(let i=0;i<cands.length;i++){if(sums[i]>bestSum){bestSum=sums[i];best=cands[i];}}
   return best;
 }
 
@@ -966,7 +1000,7 @@ function App(){
         <button data-tid="rank-btn" onClick={()=>setShowRank(true)} style={{padding:"6px 16px",fontSize:12,background:"transparent",border:"1px solid #C4A882",borderRadius:4,cursor:"pointer",color:"#5C3317",fontFamily:"inherit"}}>📊 {t.rank.btn}</button>
         {muteBtn}
       </div>
-      <div style={{marginTop:32,fontSize:11,color:"#B8A88A"}}>v2.2 &copy; {t.credit}</div>
+      <div style={{marginTop:32,fontSize:11,color:"#B8A88A"}}>v2.3 &copy; {t.credit}</div>
     </div>
     {rulesModal}
     {achModal}
@@ -1047,7 +1081,7 @@ function App(){
       <div style={{fontWeight:700,marginBottom:3}}>📜 {t.log}</div>
       {game.logs.slice(-4).map((entry,i)=><div key={i} style={{padding:"2px 0",borderBottom:"1px solid #D4C4A8",opacity:0.55+(i*0.15)}}>{renderLog(entry,lang)}</div>)}
     </div>)}
-    <div style={{textAlign:"center",marginTop:16,paddingBottom:12,fontSize:10,color:"#B8A88A"}}>v2.2 &copy; {t.credit}</div>
+    <div style={{textAlign:"center",marginTop:16,paddingBottom:12,fontSize:10,color:"#B8A88A"}}>v2.3 &copy; {t.credit}</div>
     {rulesModal}
     {achModal}
   </div>);
